@@ -232,6 +232,9 @@ class VoterClient:
         ttk.Button(btn_frame, text="📑 Получить реестр",
                    command=self.get_voters_registry).pack(side=tk.LEFT, padx=5)
         
+        ttk.Button(btn_frame, text="👀 Показать реестр",
+                   command=self.show_registry_local).pack(side=tk.LEFT, padx=5)
+        
         ttk.Button(btn_frame, text="✅ Проверить МОЙ голос",
                    command=self.verify_my_vote).pack(side=tk.LEFT, padx=5)
 
@@ -1073,6 +1076,15 @@ e: {bulletin_data.get('e', 'N/A')}
             'type': 'get_voters_registry',
             'timestamp': datetime.now().isoformat()
         })
+
+    def show_registry_local(self):
+        """Показать последний полученный реестр"""
+        if not self.voters_registry:
+            messagebox.showinfo("Информация", "Реестр еще не получен. Нажмите \"Получить реестр\".")
+            return
+
+        self.update_registry_table()
+        messagebox.showinfo("Информация", f"Показан локально сохраненный реестр ({len(self.voters_registry)} записей).")
 
     # === Криптографические методы ===
 
