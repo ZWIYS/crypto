@@ -331,6 +331,12 @@ class VoterClient:
 
         ttk.Button(btn_frame, text="📊 Получить результаты",
                    command=self.get_results).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(btn_frame, text="📑 Получить реестр",
+                   command=self.get_voters_registry).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(btn_frame, text="👀 Показать реестр",
+                   command=self.show_registry_local).pack(side=tk.LEFT, padx=5)
         
         ttk.Button(btn_frame, text="✅ Проверить МОЙ голос",
                    command=self.verify_my_vote).pack(side=tk.LEFT, padx=5)
@@ -369,6 +375,23 @@ class VoterClient:
 
         self.bulletins_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Реестр избирателей
+        registry_frame = ttk.LabelFrame(frame, text="Реестр допущенных избирателей", padding=5)
+        registry_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        reg_columns = ('ID', 'ФИО', 'Допущен')
+        self.registry_tree = ttk.Treeview(registry_frame, columns=reg_columns, show='headings', height=8)
+
+        for col in reg_columns:
+            self.registry_tree.heading(col, text=col)
+            self.registry_tree.column(col, width=180)
+
+        reg_scrollbar = ttk.Scrollbar(registry_frame, orient=tk.VERTICAL, command=self.registry_tree.yview)
+        self.registry_tree.configure(yscrollcommand=reg_scrollbar.set)
+
+        self.registry_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        reg_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         # Результаты
         results_frame = ttk.LabelFrame(frame, text="Результаты голосования", padding=5)
