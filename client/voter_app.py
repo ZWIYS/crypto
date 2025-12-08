@@ -36,6 +36,8 @@ class VoterClient:
         self.authenticated = False
         self.election = None
         self.has_voted = False
+        self.eligible_voters = set()
+        self.voters_registry = []
 
         # Криптография
         self.dss_entropy = EntropyCollector()
@@ -398,6 +400,11 @@ class VoterClient:
                 'type': 'get_election_info',
                 'timestamp': datetime.now().isoformat()
             })
+            # Запрашиваем реестр допущенных избирателей
+            self.send_message({
+                'type': 'get_voters_registry',
+                'timestamp': datetime.now().isoformat()
+            })
 
         except socket.timeout:
             self.log("Таймаут подключения к серверу", "ERROR")
@@ -534,6 +541,8 @@ class VoterClient:
             self.handle_bulletins_published(message)
         elif msg_type == 'results_published':
             self.handle_results_published(message)
+        elif msg_type == 'voters_registry':
+            self.handle_voters_registry(message)
         else:
             self.log(f"Неизвестный тип сообщения: {msg_type}", "WARNING")
 
@@ -606,6 +615,9 @@ class VoterClient:
         election_data = message.get('election')
         if election_data:
             self.election = Election.from_dict(election_data)
+            eligible = message.get('eligible_voters', [])
+            if eligible:
+                self.eligible_voters = set(eligible)
             self.update_election_info()
             self.update_voting_button()
 
@@ -624,6 +636,9 @@ class VoterClient:
         election_data = message.get('election')
         if election_data:
             self.election = Election.from_dict(election_data)
+            eligible = message.get('eligible_voters', [])
+            if eligible:
+                self.eligible_voters = set(eligible)
             self.update_election_info()
             self.update_voting_button()
 
@@ -657,6 +672,18 @@ class VoterClient:
         self.log("Опубликованы результаты голосования", "INFO")
         messagebox.showinfo("Информация", "Результаты голосования опубликованы!")
 
+    def handle_voters_registry(self, message: dict):
+        """Обработка опубликованного реестра избирателей"""
+        registry = message.get('registry', [])
+        eligible = message.get('eligible_voters', [])
+
+        self.voters_registry = registry
+        self.eligible_voters = set(eligible)
+
+        self.log(f"Получен реестр из {len(registry)} избирателей", "INFO")
+        self.update_voter_info()
+        self.update_voting_button()
+
     # === Методы GUI ===
 
     def update_voter_info(self):
@@ -665,12 +692,16 @@ class VoterClient:
         if self.voter:
             auth_status = "✅ Аутентифицирован" if self.authenticated else "❌ Не аутентифицирован"
             vote_status = "✅ Проголосовал" if self.voter.has_voted or self.has_voted else "❌ Не голосовал"
+            eligible_status = "Неизвестно"
+            if self.eligible_voters:
+                eligible_status = "✅ Допущен" if self.voter.id in self.eligible_voters else "❌ Не в реестре"
 
             info = f"""
 ID: {self.voter.id}
 ФИО: {self.voter.name}
 Статус: {auth_status}
 Голосование: {vote_status}
+Допуск: {eligible_status}
 Хэш бюллетеня: {self.voter.bulletin_hash[:30] + '...' if self.voter.bulletin_hash else 'Нет'}
             """
 
@@ -699,7 +730,8 @@ ID: {self.voter.id}
                 self.election.is_active and
                 not self.has_voted and
                 not self.voter.has_voted and
-                self.dss_keys_generated
+                self.dss_keys_generated and
+                (not self.eligible_voters or self.voter.id in self.eligible_voters)
         )
 
         if can_vote:
@@ -723,6 +755,8 @@ ID: {self.voter.id}
                 reason = "Уже проголосовал"
             elif not self.dss_keys_generated:
                 reason = "Нет DSS ключей"
+            elif self.eligible_voters and self.voter and self.voter.id not in self.eligible_voters:
+                reason = "Нет в реестре"
 
             if reason:
                 self.vote_btn.config(text=f"Голосование недоступно ({reason})")

@@ -38,6 +38,7 @@ class CenterServer:
         self.voters = {}  # id -> Voter
         self.bulletins = []  # Список бюллетеней
         self.published_data = []  # Опубликованные данные
+        self.allowed_voters = set()  # Снимок реестра допущенных
 
         # Криптография
         self.rsa_keys = None
@@ -213,6 +214,12 @@ class CenterServer:
         self.voters_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
+        # Кнопка публикации реестра
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X, pady=8)
+        ttk.Button(btn_frame, text="📢 Опубликовать реестр допущенных",
+                   command=self.publish_voters_registry).pack(side=tk.LEFT, padx=5)
+
     def setup_bulletins_tab(self, parent):
         """Вкладка бюллетеней"""
         frame = ttk.LabelFrame(parent, text="Полученные бюллетени", padding=10)
@@ -365,6 +372,10 @@ ID: {self.current_election.id}
 
         self.current_election.start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.current_election.is_active = True
+        self.allowed_voters = set(self.voters.keys())
+
+        # Публикуем реестр допущенных избирателей
+        self.publish_voters_registry()
 
         self.start_btn.config(state=tk.DISABLED)
         self.end_btn.config(state=tk.NORMAL)
@@ -373,7 +384,8 @@ ID: {self.current_election.id}
         self.log("Голосование начато")
         self.broadcast_message({
             'type': 'election_started',
-            'election': self.current_election.to_dict()
+            'election': self.current_election.to_dict(),
+            'eligible_voters': list(self.allowed_voters)
         })
 
     def end_election(self):
@@ -689,6 +701,8 @@ R = {results['R']}
             self.handle_get_election_info(client_socket)
         elif msg_type == 'get_published_data':
             self.handle_get_published_data(client_socket)
+        elif msg_type == 'get_voters_registry':
+            self.handle_get_voters_registry(client_socket)
         else:
             self.log(f"Неизвестный тип сообщения: {msg_type}", "WARNING")
 
@@ -742,6 +756,12 @@ R = {results['R']}
                 'success': False,
                 'message': 'Избиратель не найден'
             }
+        elif self.allowed_voters and voter_id not in self.allowed_voters:
+            response = {
+                'type': 'authenticate_response',
+                'success': False,
+                'message': 'Избиратель не допущен к голосованию'
+            }
         elif self.voters[voter_id].has_voted:
             response = {
                 'type': 'authenticate_response',
@@ -777,6 +797,12 @@ R = {results['R']}
                 'type': 'submit_response',
                 'success': False,
                 'message': 'Избиратель уже проголосовал'
+            }
+        elif self.allowed_voters and voter_id not in self.allowed_voters:
+            response = {
+                'type': 'submit_response',
+                'success': False,
+                'message': 'Избиратель не допущен к голосованию'
             }
         elif not self.current_election or not self.current_election.is_active:
             response = {
@@ -837,7 +863,8 @@ R = {results['R']}
             'type': 'election_info',
             'election': self.current_election.to_dict() if self.current_election else None,
             'voters_count': len(self.voters),
-            'voted_count': sum(1 for v in self.voters.values() if v.has_voted)
+            'voted_count': sum(1 for v in self.voters.values() if v.has_voted),
+            'eligible_voters': list(self.allowed_voters)
         }
 
         MessageProtocol.send_message(client_socket, response)
@@ -848,6 +875,21 @@ R = {results['R']}
             'type': 'published_data',
             'bulletins': self.published_data,
             'results': self.current_election.results if self.current_election else None
+        }
+
+        MessageProtocol.send_message(client_socket, response)
+
+    def handle_get_voters_registry(self, client_socket):
+        """Отправка реестра допущенных к голосованию избирателей"""
+        registry = [{
+            'id': voter.id,
+            'name': voter.name
+        } for voter in self.voters.values()]
+
+        response = {
+            'type': 'voters_registry',
+            'eligible_voters': list(self.allowed_voters),
+            'registry': registry
         }
 
         MessageProtocol.send_message(client_socket, response)
@@ -879,6 +921,21 @@ R = {results['R']}
     def run(self):
         """Запуск приложения сервера"""
         self.root.mainloop()
+
+    def publish_voters_registry(self):
+        """Публикация реестра допущенных избирателей"""
+        registry = [{
+            'id': voter.id,
+            'name': voter.name
+        } for voter in self.voters.values()]
+
+        self.log(f"Опубликован реестр из {len(registry)} избирателей")
+
+        self.broadcast_message({
+            'type': 'voters_registry',
+            'eligible_voters': list(self.allowed_voters),
+            'registry': registry
+        })
 
 
 def main():
