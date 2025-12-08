@@ -229,6 +229,9 @@ class VoterClient:
         ttk.Button(btn_frame, text="📊 Получить результаты",
                    command=self.get_results).pack(side=tk.LEFT, padx=5)
         
+        ttk.Button(btn_frame, text="📑 Получить реестр",
+                   command=self.get_voters_registry).pack(side=tk.LEFT, padx=5)
+        
         ttk.Button(btn_frame, text="✅ Проверить МОЙ голос",
                    command=self.verify_my_vote).pack(side=tk.LEFT, padx=5)
 
@@ -249,6 +252,23 @@ class VoterClient:
 
         self.bulletins_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Реестр избирателей
+        registry_frame = ttk.LabelFrame(frame, text="Реестр допущенных избирателей", padding=5)
+        registry_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        reg_columns = ('ID', 'ФИО', 'Допущен')
+        self.registry_tree = ttk.Treeview(registry_frame, columns=reg_columns, show='headings', height=8)
+
+        for col in reg_columns:
+            self.registry_tree.heading(col, text=col)
+            self.registry_tree.column(col, width=180)
+
+        reg_scrollbar = ttk.Scrollbar(registry_frame, orient=tk.VERTICAL, command=self.registry_tree.yview)
+        self.registry_tree.configure(yscrollcommand=reg_scrollbar.set)
+
+        self.registry_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        reg_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         # Результаты
         results_frame = ttk.LabelFrame(frame, text="Результаты голосования", padding=5)
@@ -683,6 +703,7 @@ class VoterClient:
         self.log(f"Получен реестр из {len(registry)} избирателей", "INFO")
         self.update_voter_info()
         self.update_voting_button()
+        self.update_registry_table()
 
     # === Методы GUI ===
 
@@ -760,6 +781,19 @@ ID: {self.voter.id}
 
             if reason:
                 self.vote_btn.config(text=f"Голосование недоступно ({reason})")
+
+    def update_registry_table(self):
+        """Отображение реестра допущенных избирателей"""
+        if not hasattr(self, 'registry_tree'):
+            return
+
+        self.registry_tree.delete(*self.registry_tree.get_children())
+
+        for entry in self.voters_registry:
+            voter_id = entry.get('id', '')
+            name = entry.get('name', '')
+            allowed = "✅" if (not self.eligible_voters or voter_id in self.eligible_voters) else "❌"
+            self.registry_tree.insert('', tk.END, values=(voter_id, name, allowed))
 
     def update_published_bulletins(self, bulletins: list):
         """Обновление списка опубликованных бюллетеней"""
@@ -1026,6 +1060,17 @@ e: {bulletin_data.get('e', 'N/A')}
 
         self.send_message({
             'type': 'get_published_data',
+            'timestamp': datetime.now().isoformat()
+        })
+
+    def get_voters_registry(self):
+        """Запрос реестра допущенных избирателей"""
+        if not self.connected:
+            messagebox.showwarning("Предупреждение", "Нет подключения к серверу")
+            return
+
+        self.send_message({
+            'type': 'get_voters_registry',
             'timestamp': datetime.now().isoformat()
         })
 

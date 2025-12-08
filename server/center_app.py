@@ -39,6 +39,10 @@ class CenterServer:
         self.bulletins = []  # Список бюллетеней
         self.published_data = []  # Опубликованные данные
         self.allowed_voters = set()  # Снимок реестра допущенных
+        self.registry_file = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "voters_registry.txt"
+        )
 
         # Криптография
         self.rsa_keys = None
@@ -49,6 +53,8 @@ class CenterServer:
         # GUI
         self.root = tk.Tk()
         self.setup_gui()
+        # Загружаем заранее подготовленный реестр
+        self.load_voters_from_file()
 
     def setup_gui(self):
         """Настройка графического интерфейса сервера"""
@@ -936,6 +942,46 @@ R = {results['R']}
             'eligible_voters': list(self.allowed_voters),
             'registry': registry
         })
+
+    def load_voters_from_file(self):
+        """Загрузка реестра из текстового файла (id;ФИО)"""
+        if not os.path.exists(self.registry_file):
+            self.log(f"Файл реестра не найден: {self.registry_file}", "WARNING")
+            return
+
+        loaded = 0
+        skipped = 0
+        try:
+            with open(self.registry_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    parts = line.split(';')
+                    if len(parts) < 2:
+                        skipped += 1
+                        continue
+
+                    voter_id = parts[0].strip()
+                    voter_name = ';'.join(parts[1:]).strip()
+
+                    if not voter_id or voter_id in self.voters:
+                        skipped += 1
+                        continue
+
+                    self.voters[voter_id] = Voter(
+                        id=voter_id,
+                        name=voter_name,
+                        public_key="",
+                        has_voted=False
+                    )
+                    loaded += 1
+
+            self.allowed_voters = set(self.voters.keys())
+            self.update_voters_list()
+            self.log(f"Реестр загружен из файла: {loaded} записей, пропущено: {skipped}")
+        except Exception as e:
+            self.log(f"Ошибка загрузки реестра: {e}", "ERROR")
 
 
 def main():
