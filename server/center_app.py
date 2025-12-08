@@ -729,10 +729,12 @@ R = {results['R']}
                 'message': 'Избиратель отсутствует в реестре'
             }
         elif voter_id in self.voters:
+            # Уже есть: считаем допущенным и подтверждаем без ошибки
             response = {
                 'type': 'register_response',
-                'success': False,
-                'message': 'Избиратель с таким ID уже зарегистрирован'
+                'success': True,
+                'message': 'Вы уже зарегистрированы и допущены к голосованию',
+                'voter': self.voters[voter_id].to_dict()
             }
         else:
             # Создаем нового избирателя
