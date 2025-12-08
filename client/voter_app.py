@@ -446,11 +446,6 @@ class VoterClient:
                 'type': 'get_election_info',
                 'timestamp': datetime.now().isoformat()
             })
-            # Запрашиваем реестр допущенных избирателей
-            self.send_message({
-                'type': 'get_voters_registry',
-                'timestamp': datetime.now().isoformat()
-            })
 
         except socket.timeout:
             self.log("Таймаут подключения к серверу", "ERROR")
