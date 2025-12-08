@@ -38,6 +38,7 @@ class VoterClient:
         self.has_voted = False
         self.eligible_voters = set()
         self.voters_registry = []
+        self.registry_status = {}  # voter_id -> статус в реестре
 
         # Криптография
         self.dss_entropy = EntropyCollector()
@@ -260,12 +261,12 @@ class VoterClient:
         registry_frame = ttk.LabelFrame(frame, text="Реестр допущенных избирателей", padding=5)
         registry_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        reg_columns = ('ID', 'ФИО', 'Допущен')
+        reg_columns = ('ID', 'ФИО', 'Допущен', 'Статус')
         self.registry_tree = ttk.Treeview(registry_frame, columns=reg_columns, show='headings', height=8)
 
         for col in reg_columns:
             self.registry_tree.heading(col, text=col)
-            self.registry_tree.column(col, width=180)
+            self.registry_tree.column(col, width=150 if col != 'ФИО' else 220)
 
         reg_scrollbar = ttk.Scrollbar(registry_frame, orient=tk.VERTICAL, command=self.registry_tree.yview)
         self.registry_tree.configure(yscrollcommand=reg_scrollbar.set)
@@ -597,6 +598,8 @@ class VoterClient:
         if success:
             voter_data = message.get('voter', {})
             self.voter = Voter.from_dict(voter_data)
+            if self.voter:
+                self.registry_status[self.voter.id] = "✅ Аутентифицировался"
 
             self.update_voter_info()
             self.log(f"Регистрация успешна: {msg_text}", "SUCCESS")
@@ -619,10 +622,13 @@ class VoterClient:
             election_data = message.get('election')
             if election_data:
                 self.election = Election.from_dict(election_data)
+            if self.voter:
+                self.registry_status[self.voter.id] = "✅ Аутентифицировался"
 
             self.update_voter_info()
             self.update_election_info()
             self.update_voting_button()
+            self.update_registry_table()
 
             self.log(f"Аутентификация успешна: {msg_text}", "SUCCESS")
             messagebox.showinfo("Успех", "Аутентификация успешна!\nТеперь вы можете проголосовать.")
@@ -639,9 +645,11 @@ class VoterClient:
             self.has_voted = True
             if self.voter:
                 self.voter.has_voted = True
+                self.registry_status[self.voter.id] = "✅ Проголосовал"
 
             self.update_voter_info()
             self.update_voting_button()
+            self.update_registry_table()
 
             bulletin_id = message.get('bulletin_id', 0)
 
@@ -720,6 +728,8 @@ class VoterClient:
 
         self.voters_registry = registry
         self.eligible_voters = set(eligible)
+        # Инициализируем статусы по умолчанию
+        self.registry_status = {entry.get('id', ''): "❌ Не аутентифицировался" for entry in registry if entry.get('id')}
 
         self.log(f"Получен реестр из {len(registry)} избирателей", "INFO")
         self.update_voter_info()
@@ -814,7 +824,8 @@ ID: {self.voter.id}
             voter_id = entry.get('id', '')
             name = entry.get('name', '')
             allowed = "✅" if (not self.eligible_voters or voter_id in self.eligible_voters) else "❌"
-            self.registry_tree.insert('', tk.END, values=(voter_id, name, allowed))
+            status = self.registry_status.get(voter_id, "❌ Не аутентифицировался")
+            self.registry_tree.insert('', tk.END, values=(voter_id, name, allowed, status))
 
     def update_published_bulletins(self, bulletins: list):
         """Обновление списка опубликованных бюллетеней"""
