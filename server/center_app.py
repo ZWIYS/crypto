@@ -39,6 +39,7 @@ class CenterServer:
         self.bulletins = []  # Список бюллетеней
         self.published_data = []  # Опубликованные данные
         self.allowed_voters = set()  # Снимок реестра допущенных
+        self.authenticated_voters = set()  # ID прошедших аутентификацию
         self.registry_file = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "voters_registry.txt"
@@ -207,12 +208,17 @@ class CenterServer:
         list_frame = ttk.LabelFrame(frame, text="Зарегистрированные избиратели", padding=5)
         list_frame.pack(fill=tk.BOTH, expand=True, pady=10)
 
-        columns = ('ID', 'ФИО', 'Проголосовал', 'Хэш бюллетеня')
+        columns = ('ID', 'ФИО', 'Допущен', 'Статус', 'Хэш бюллетеня')
         self.voters_tree = ttk.Treeview(list_frame, columns=columns, show='headings', height=15)
 
         for col in columns:
             self.voters_tree.heading(col, text=col)
-            self.voters_tree.column(col, width=150)
+            width = 140
+            if col == 'ФИО':
+                width = 200
+            elif col == 'Хэш бюллетеня':
+                width = 200
+            self.voters_tree.column(col, width=width)
 
         scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.voters_tree.yview)
         self.voters_tree.configure(yscrollcommand=scrollbar.set)
@@ -442,10 +448,13 @@ ID: {self.current_election.id}
         self.voters_tree.delete(*self.voters_tree.get_children())
 
         for voter_id, voter in self.voters.items():
+            allowed = "✅" if (not self.allowed_voters or voter_id in self.allowed_voters) else "❌"
+            status = "✅ Проголосовал" if voter.has_voted else ("✅ Аутентифицировался" if voter_id in self.authenticated_voters else "❌ Не аутентифицировался")
             self.voters_tree.insert('', tk.END, values=(
                 voter.id,
                 voter.name,
-                "✅" if voter.has_voted else "❌",
+                allowed,
+                status,
                 voter.bulletin_hash[:20] + "..." if voter.bulletin_hash else "Нет"
             ))
 
@@ -782,6 +791,7 @@ R = {results['R']}
                 'message': 'Избиратель уже проголосовал'
             }
         else:
+            self.authenticated_voters.add(voter_id)
             response = {
                 'type': 'authenticate_response',
                 'success': True,
