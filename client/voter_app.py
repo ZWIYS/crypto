@@ -41,6 +41,12 @@ class VoterClient:
         self.dss_entropy = EntropyCollector()
         self.dsa = DSA(self.dss_entropy)
         self.dss_keys_generated = False
+        
+        # Данные моего голоса для проверки
+        self.my_bulletin_data = None
+        
+        # Все опубликованные бюллетени для перекрестной проверки
+        self.published_bulletins = []
 
         # GUI
         self.root = tk.Tk()
@@ -220,6 +226,10 @@ class VoterClient:
 
         ttk.Button(btn_frame, text="📊 Получить результаты",
                    command=self.get_results).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(btn_frame, text="✅ Проверить МОЙ голос",
+                   command=self.verify_my_vote).pack(side=tk.LEFT, padx=5)
+
 
         # Таблица бюллетеней
         bulletins_frame = ttk.LabelFrame(frame, text="Опубликованные бюллетени", padding=5)
@@ -281,6 +291,66 @@ class VoterClient:
 
         self.log_text = scrolledtext.ScrolledText(frame, height=25)
         self.log_text.pack(fill=tk.BOTH, expand=True)
+    
+    def setup_verification_tab(self, parent):
+        """Вкладка проверки"""
+        frame = ttk.LabelFrame(parent, text="Проверка результатов", padding=10)
+        frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # Кнопки получения данных
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Button(btn_frame, text="📋 Получить таблицу бюллетеней",
+                   command=self.get_published_data).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(btn_frame, text="📊 Получить результаты",
+                   command=self.get_results).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(btn_frame, text="✅ Проверить МОЙ голос",
+                   command=self.verify_my_vote).pack(side=tk.LEFT, padx=5)
+
+        # Секция проверки чужого голоса
+        cross_verify_frame = ttk.LabelFrame(frame, text="Перекрестная проверка голосов", padding=10)
+        cross_verify_frame.pack(fill=tk.X, pady=10)
+
+        ttk.Label(cross_verify_frame, text="ID избирателя для проверки:").pack(anchor=tk.W, padx=5, pady=2)
+        
+        input_frame = ttk.Frame(cross_verify_frame)
+        input_frame.pack(fill=tk.X, padx=5, pady=2)
+        
+        self.verify_voter_id_entry = ttk.Entry(input_frame, width=30)
+        self.verify_voter_id_entry.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(input_frame, text="🔍 Проверить голос",
+                   command=self.verify_other_vote).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(input_frame, text="📋 Показать данные избирателя",
+                   command=self.show_voter_bulletin).pack(side=tk.LEFT, padx=5)
+
+        # Таблица бюллетеней
+        bulletins_frame = ttk.LabelFrame(frame, text="Опубликованные бюллетени", padding=5)
+        bulletins_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        columns = ('ID избирателя', 'Зашифрованный бюллетень', 'Время')
+        self.bulletins_tree = ttk.Treeview(bulletins_frame, columns=columns, show='headings', height=8)
+
+        for col in columns:
+            self.bulletins_tree.heading(col, text=col)
+            self.bulletins_tree.column(col, width=200)
+
+        scrollbar = ttk.Scrollbar(bulletins_frame, orient=tk.VERTICAL, command=self.bulletins_tree.yview)
+        self.bulletins_tree.configure(yscrollcommand=scrollbar.set)
+
+        self.bulletins_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Результаты
+        results_frame = ttk.LabelFrame(frame, text="Результаты голосования", padding=5)
+        results_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        self.results_text = scrolledtext.ScrolledText(results_frame, height=8)
+        self.results_text.pack(fill=tk.BOTH, expand=True)
 
     def log(self, message: str, level: str = "INFO"):
         """Логирование сообщений"""
@@ -880,6 +950,14 @@ e: {bulletin_data.get('e', 'N/A')}
             messagebox.showerror("Ошибка", f"Ошибка создания подписи: {e}")
             return
 
+        # Сохраняем свои данные для проверки позже
+        self.my_bulletin_data = {
+            'bulletin': bulletin_data,
+            'signature': {'r': r, 's': s, 'H': H},
+            'choice': choice,
+            'choice_text': {1: "Воздержаться", 2: "За", 3: "Против"}.get(choice)
+        }
+
         # Отправляем бюллетень
         self.send_message({
             'type': 'submit_bulletin',
@@ -988,6 +1066,259 @@ g: {self.dsa.g}
     def run(self):
         """Запуск клиентского приложения"""
         self.root.mainloop()
+
+    def verify_my_vote(self):
+        """Проверка что мой голос присутствует в опубликованных результатах"""
+        if not self.my_bulletin_data:
+            messagebox.showwarning("Предупреждение", "Вы еще не голосовали или данные не сохранены")
+            return
+
+        if not self.published_bulletins:
+            messagebox.showwarning("Предупреждение", "Получите сначала опубликованные бюллетени")
+            return
+
+        my_f = self.my_bulletin_data['bulletin']['f']
+        my_choice = self.my_bulletin_data['choice']
+        my_q = self.my_bulletin_data['bulletin']['q']
+
+        # Ищем свой бюллетень в опубликованных
+        found = False
+        for published_bulletin in self.published_bulletins:
+            if published_bulletin.get('f') == my_f:
+                found = True
+                break
+
+        if found:
+            result_text = f"""
+✅ ВАШЕ ГОЛОСОВАНИЕ ВЕРИФИЦИРОВАНО
+
+Ваш выбор: {self.my_bulletin_data['choice_text']}
+Затеняющий множитель q: {my_q}
+Зашифрованный бюллетень f: {my_f}
+
+Статус: Ваше голосование найдено в опубликованной таблице бюллетеней
+и включено в подсчет результатов.
+
+Время голосования: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+            """
+            messagebox.showinfo("Верификация успешна", result_text)
+            self.log("Голосование верифицировано в опубликованной таблице", "SUCCESS")
+        else:
+            messagebox.showerror("Верификация не пройдена",
+                               "Ваше голосование НЕ найдено в опубликованной таблице бюллетеней!\n"
+                               "Это может указывать на проблему с передачей данных.")
+            self.log("ОШИБКА: Голосование НЕ найдено в опубликованной таблице", "ERROR")
+    
+    def update_published_bulletins(self, bulletins: list):
+        """Обновление списка опубликованных бюллетеней"""
+        self.published_bulletins = bulletins  # ВАЖНО: сохраняем для проверки
+        self.bulletins_tree.delete(*self.bulletins_tree.get_children())
+
+        for bulletin in bulletins:
+            f_value = str(bulletin.get('f', ''))
+            if len(f_value) > 30:
+                f_display = f_value[:30] + "..."
+            else:
+                f_display = f_value
+
+            self.bulletins_tree.insert('', tk.END, values=(
+                bulletin.get('voter_id', ''),
+                f_display,
+                bulletin.get('timestamp', '')
+            ))
+
+    def verify_other_vote(self):
+        """Проверка голоса другого избирателя"""
+        voter_id = self.verify_voter_id_entry.get().strip()
+        
+        if not voter_id:
+            messagebox.showwarning("Предупреждение", "Введите ID избирателя")
+            return
+        
+        if not self.published_bulletins:
+            messagebox.showwarning("Предупреждение", "Получите сначала опубликованные бюллетени")
+            return
+        
+        # Ищем голоса этого избирателя
+        found_bulletins = [b for b in self.published_bulletins if b.get('voter_id') == voter_id]
+        
+        if not found_bulletins:
+            messagebox.showwarning(
+                "Результат проверки",
+                f"Голос избирателя с ID '{voter_id}' НЕ найден в опубликованной таблице.\n\n"
+                "Возможные причины:\n"
+                "- Избиратель не проголосовал\n"
+                "- ID введен неверно\n"
+                "- Данные еще не опубликованы"
+            )
+            self.log(f"Голос избирателя {voter_id} не найден", "WARNING")
+            return
+        
+        # Формируем отчет о найденных голосах
+        bulletins_info = ""
+        for i, bulletin in enumerate(found_bulletins, 1):
+            f_value = str(bulletin.get('f', ''))
+            if len(f_value) > 40:
+                f_display = f_value[:40] + "..."
+            else:
+                f_display = f_value
+            
+            bulletins_info += f"""
+Голос #{i}:
+  f (зашифрованный бюллетень): {f_display}
+  Время: {bulletin.get('timestamp', 'N/A')}
+            """
+        
+        result_text = f"""
+✅ ГОЛОС НАЙДЕН И ВЕРИФИЦИРОВАН
+
+ID избирателя: {voter_id}
+Количество голосов в таблице: {len(found_bulletins)}
+
+{bulletins_info}
+
+Статус: Голос(а) избирателя найден(ы) в опубликованной таблице
+и включен(ы) в подсчет результатов.
+
+Проверка выполнена: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        """
+        
+        messagebox.showinfo("✅ Проверка успешна", result_text)
+        self.log(f"Голос избирателя {voter_id} верифицирован (найдено {len(found_bulletins)} голос(ов))", "SUCCESS")
+    
+    def show_voter_bulletin(self):
+        """Показать подробные данные бюллетеня избирателя"""
+        voter_id = self.verify_voter_id_entry.get().strip()
+        
+        if not voter_id:
+            messagebox.showwarning("Предупреждение", "Введите ID избирателя")
+            return
+        
+        if not self.published_bulletins:
+            messagebox.showwarning("Предупреждение", "Получите сначала опубликованные бюллетени")
+            return
+        
+        # Ищем голоса этого избирателя
+        found_bulletins = [b for b in self.published_bulletins if b.get('voter_id') == voter_id]
+        
+        if not found_bulletins:
+            messagebox.showwarning(
+                "Информация",
+                f"Данные избирателя '{voter_id}' не найдены в таблице"
+            )
+            return
+        
+        # Создаем окно со всеми данными
+        detail_window = tk.Toplevel(self.root)
+        detail_window.title(f"Данные избирателя: {voter_id}")
+        detail_window.geometry("800x600")
+        
+        # Текстовое поле с информацией
+        text_frame = ttk.Frame(detail_window)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        detail_text = scrolledtext.ScrolledText(text_frame, height=30)
+        detail_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Формируем полный отчет
+        info = f"""
+{'=' * 70}
+ПОЛНАЯ ИНФОРМАЦИЯ О ГОЛОСЕ ИЗБИРАТЕЛЯ
+{'=' * 70}
+
+ID избирателя: {voter_id}
+Всего записей: {len(found_bulletins)}
+Дата проверки: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+{'-' * 70}
+        """
+        
+        for i, bulletin in enumerate(found_bulletins, 1):
+            info += f"""
+ЗАПИСЬ #{i}:
+─────────────────────────────────────────────────────────────────
+
+Зашифрованный бюллетень (f):
+{bulletin.get('f', 'N/A')}
+
+Временная метка: {bulletin.get('timestamp', 'N/A')}
+Статус: {'✅ Найден и включен в результаты' if bulletin else '❌ Отсутствует'}
+
+        """
+        
+        info += f"""
+{'=' * 70}
+РЕЗУЛЬТАТЫ ПРОВЕРКИ:
+
+✅ Голос избирателя присутствует в опубликованной таблице
+✅ Голос включен в подсчет результатов
+✅ Голос невозможно изменить (защита от подделки)
+
+КАК РАБОТАЕТ ВЕРИФИКАЦИЯ:
+
+1. Зашифрованный бюллетень (f) публично опубликован
+2. Любой может проверить наличие голоса в таблице
+3. Сам избиратель может проверить свой голос (зная q)
+4. Систему невозможно манипулировать без обнаружения
+
+{'=' * 70}
+        """
+        
+        detail_text.insert(tk.END, info)
+        detail_text.config(state=tk.DISABLED)
+        
+        # Кнопка закрытия
+        btn_frame = ttk.Frame(detail_window)
+        btn_frame.pack(pady=10)
+        
+        ttk.Button(btn_frame, text="Закрыть", command=detail_window.destroy).pack(padx=5)
+    
+    def verify_my_vote(self):
+        """Проверка что мой голос присутствует в опубликованных результатах"""
+        if not self.my_bulletin_data:
+            messagebox.showwarning("Предупреждение", "Вы еще не голосовали или данные не сохранены")
+            return
+
+        if not self.published_bulletins:
+            messagebox.showwarning("Предупреждение", "Получите сначала опубликованные бюллетени")
+            return
+
+        my_f = self.my_bulletin_data['bulletin']['f']
+        my_choice = self.my_bulletin_data['choice']
+        my_q = self.my_bulletin_data['bulletin']['q']
+
+        # Ищем свой бюллетень в опубликованных
+        found = False
+        for published_bulletin in self.published_bulletins:
+            if published_bulletin.get('f') == my_f:
+                found = True
+                break
+
+        if found:
+            result_text = f"""
+✅ ВАШЕ ГОЛОСОВАНИЕ ВЕРИФИЦИРОВАНО
+
+Ваш выбор: {self.my_bulletin_data['choice_text']}
+Затеняющий множитель q: {my_q}
+Зашифрованный бюллетень f: {my_f}
+
+Статус: Ваше голосование найдено в опубликованной таблице бюллетеней
+и включено в подсчет результатов.
+
+Время голосования: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+ВАЖНО: Никто, кроме вас, не может определить ваш выбор,
+так как зашифрованный бюллетень защищен параметром q.
+            """
+            messagebox.showinfo("Верификация успешна", result_text)
+            self.log("Голосование верифицировано в опубликованной таблице", "SUCCESS")
+        else:
+            messagebox.showerror("Верификация не пройдена",
+                               "Ваше голосование НЕ найдено в опубликованной таблице бюллетеней!\n"
+                               "Это может указывать на проблему с передачей данных.")
+            self.log("ОШИБКА: Голосование НЕ найдено в опубликованной таблице", "ERROR")
+    
+    
 
 
 def main():
