@@ -378,7 +378,6 @@ ID: {self.current_election.id}
 
         self.current_election.start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.current_election.is_active = True
-        self.allowed_voters = set(self.voters.keys())
 
         # Публикуем реестр допущенных избирателей
         self.publish_voters_registry()
@@ -722,6 +721,12 @@ R = {results['R']}
                 'type': 'register_response',
                 'success': False,
                 'message': 'Не указаны данные избирателя'
+            }
+        elif self.allowed_voters and voter_id not in self.allowed_voters:
+            response = {
+                'type': 'register_response',
+                'success': False,
+                'message': 'Избиратель отсутствует в реестре'
             }
         elif voter_id in self.voters:
             response = {
