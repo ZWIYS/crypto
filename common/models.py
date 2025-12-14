@@ -31,6 +31,8 @@ class Bulletin:
     encrypted_data: Dict[str, Any]
     signature: Dict[str, Any]
     timestamp: str
+    is_valid: bool = True  # ДОБАВИТЬ: статус проверки
+    validation_message: str = ""  # ДОБАВИТЬ: сообщение о проверке
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

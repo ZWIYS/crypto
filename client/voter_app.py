@@ -222,12 +222,19 @@ class VoterClient:
         self.attack_type = tk.StringVar(value="invalid_f")
         ttk.Radiobutton(attack_type_frame, text="Некорректное f", variable=self.attack_type, 
                        value="invalid_f").pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(attack_type_frame, text="Некорректный choice", variable=self.attack_type,
-                       value="invalid_choice").pack(side=tk.LEFT, padx=5)
         ttk.Radiobutton(attack_type_frame, text="Некорректные параметры RSA", variable=self.attack_type,
                        value="invalid_rsa").pack(side=tk.LEFT, padx=5)
         ttk.Radiobutton(attack_type_frame, text="Нарушить вычисления", variable=self.attack_type,
                        value="broken_calc").pack(side=tk.LEFT, padx=5)
+        
+        # НОВЫЕ типы атак
+        attack_type_frame2 = ttk.Frame(attack_frame)
+        attack_type_frame2.pack(fill=tk.X, pady=5)
+        
+        ttk.Radiobutton(attack_type_frame2, text="Некорректный q (< 5)", variable=self.attack_type,
+                       value="invalid_q").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(attack_type_frame2, text="Отсутствует поле", variable=self.attack_type,
+                       value="missing_field").pack(side=tk.LEFT, padx=5)
 
         # Информация о бюллетене
         bulletin_frame = ttk.LabelFrame(frame, text="Сгенерированный бюллетень", padding=10)
@@ -588,8 +595,10 @@ class VoterClient:
         """Обработка ответа на отправку бюллетеня"""
         success = message.get('success', False)
         msg_text = message.get('message', '')
+        is_valid = message.get('is_valid', True)
+        validation_message = message.get('validation_message', '')
 
-        if success:
+        if success and is_valid:
             self.has_voted = True
             if self.voter:
                 self.voter.has_voted = True
@@ -603,6 +612,18 @@ class VoterClient:
 
             self.log(f"Бюллетень принят (ID: {bulletin_id})", "SUCCESS")
             messagebox.showinfo("Успех", "Ваш голос успешно зарегистрирован!")
+        elif success and not is_valid:
+            # Бюллетень принят, но некорректен
+            if self.my_bulletin_data:
+                self.my_bulletin_data['is_valid'] = False
+                self.my_bulletin_data['validation_message'] = validation_message
+            
+            self.log(f"⚠️ Бюллетень принят, но некорректен: {validation_message}", "WARNING")
+            messagebox.showwarning("Бюллетень некорректен",
+                                 f"Ваш бюллетень был принят, но он некорректен!\n\n"
+                                 f"Причина: {validation_message}\n\n"
+                                 f"⚠️ Этот бюллетень НЕ будет учтен при подсчете результатов.\n"
+                                 f"При проверке вы увидите, что бюллетень был изменен при отправке.")
         else:
             self.log(f"Ошибка отправки бюллетеня: {msg_text}", "ERROR")
             messagebox.showerror("Ошибка", msg_text)
@@ -796,12 +817,16 @@ ID: {self.voter.id}
         if not results:
             text = "Результаты еще не опубликованы"
         else:
+            invalid_count = results.get('invalid_count', 0)
             text = f"""
 {'=' * 50}
 РЕЗУЛЬТАТЫ ГОЛОСОВАНИЯ
 {'=' * 50}
-Всего избирателей: {results.get('total', 0)}
-Проголосовали: {results.get('for', 0) + results.get('against', 0) + results.get('abstained', 0)}
+Всего получено бюллетеней: {results.get('total', 0) + invalid_count}
+✅ Корректных бюллетеней: {results.get('total', 0)}
+❌ Некорректных бюллетеней: {invalid_count}
+
+Проголосовали (учтено): {results.get('for', 0) + results.get('against', 0) + results.get('abstained', 0)}
 
 ✅ Голоса \"ЗА\": {results.get('for', 0)}
 ❌ Голоса \"ПРОТИВ\": {results.get('against', 0)}
@@ -813,6 +838,9 @@ Q = {results.get('Q', 0)}
 R = {results.get('R', 0)}
 {'=' * 50}
             """
+            
+            if invalid_count > 0:
+                text += f"\n⚠️ ВНИМАНИЕ: {invalid_count} некорректных бюллетеней не учтены в подсчете!"
 
         self.results_text.delete(1.0, tk.END)
         self.results_text.insert(tk.END, text)
@@ -970,27 +998,43 @@ e: {bulletin_data.get('e', 'N/A')}
             # ДОБАВИТЬ: Применяем атаку, если включена
             if self.attack_enabled.get():
                 attack_type = self.attack_type.get()
+                original_f = bulletin_data['f']
+                original_t = bulletin_data['t']
+                
                 if attack_type == "invalid_f":
-                    # Изменяем f на некорректное значение
-                    original_f = bulletin_data['f']
-                    bulletin_data['f'] = (original_f * 999) % self.election.m
-                    self.log(f"⚠️ АТАКА: Отправка некорректного f (было {original_f}, стало {bulletin_data['f']})", "WARNING")
-                    
-                elif attack_type == "invalid_choice":
-                    # Изменяем choice на недопустимое значение
-                    bulletin_data['choice'] = 999
-                    self.log(f"⚠️ АТАКА: Отправка некорректного choice (999)", "WARNING")
+                    # Атака: изменяем f на случайное значение, не соответствующее t^e mod m
+                    import random
+                    # Генерируем случайное число, которое точно не будет равно правильному f
+                    wrong_f = random.randint(1, self.election.m - 1)
+                    # Убеждаемся, что это не правильное значение
+                    while wrong_f == original_f:
+                        wrong_f = random.randint(1, self.election.m - 1)
+                    bulletin_data['f'] = wrong_f
+                    self.log(f"⚠️ АТАКА: Отправка некорректного f (было {original_f}, стало {wrong_f})", "WARNING")
                     
                 elif attack_type == "invalid_rsa":
-                    # Изменяем параметры RSA
-                    bulletin_data['m'] = self.election.m + 1
-                    bulletin_data['e'] = self.election.e + 1
-                    self.log(f"⚠️ АТАКА: Отправка некорректных параметров RSA", "WARNING")
+                    # Атака: изменяем параметры RSA на неверные
+                    bulletin_data['m'] = self.election.m + 1000
+                    bulletin_data['e'] = self.election.e + 10
+                    self.log(f"⚠️ АТАКА: Отправка некорректных параметров RSA (m={bulletin_data['m']}, e={bulletin_data['e']})", "WARNING")
                     
                 elif attack_type == "broken_calc":
-                    # Нарушаем вычисления: изменяем t, но не пересчитываем f
-                    bulletin_data['t'] = bulletin_data['t'] + 1000
-                    self.log(f"⚠️ АТАКА: Нарушены вычисления (t изменен, f не пересчитан)", "WARNING")
+                    # Атака: нарушаем вычисления - изменяем t, но не пересчитываем f
+                    bulletin_data['t'] = bulletin_data['t'] + 10000
+                    # f остается старым, что нарушит проверку f == t^e mod m
+                    self.log(f"⚠️ АТАКА: Нарушены вычисления (t изменен с {original_t} на {bulletin_data['t']}, f не пересчитан)", "WARNING")
+                
+                elif attack_type == "invalid_q":
+                    # НОВАЯ АТАКА: изменяем q на слишком маленькое значение
+                    bulletin_data['q'] = 2  # Меньше минимального значения 5
+                    # Пересчитываем t, но f остается старым
+                    bulletin_data['t'] = bulletin_data['choice'] * bulletin_data['q']
+                    self.log(f"⚠️ АТАКА: q изменен на недопустимо маленькое значение (2)", "WARNING")
+                
+                elif attack_type == "missing_field":
+                    # НОВАЯ АТАКА: удаляем обязательное поле
+                    del bulletin_data['q']
+                    self.log(f"⚠️ АТАКА: Удалено обязательное поле 'q'", "WARNING")
 
             # Проверяем бюллетень (если атака не включена)
             if not self.attack_enabled.get():
@@ -1180,35 +1224,100 @@ g: {self.dsa.g}
         my_f = self.my_bulletin_data['bulletin']['f']
         my_choice = self.my_bulletin_data['choice']
         my_q = self.my_bulletin_data['bulletin']['q']
+        my_voter_id = self.voter.id if self.voter else "unknown"
+        is_attack = self.my_bulletin_data.get('is_attack', False)
+        is_valid = self.my_bulletin_data.get('is_valid', True)
+        validation_message = self.my_bulletin_data.get('validation_message', '')
 
-        # Ищем свой бюллетень в опубликованных
-        found = False
+        # Ищем свой бюллетень в опубликованных по voter_id
+        found_bulletin = None
+        
         for published_bulletin in self.published_bulletins:
-            if published_bulletin.get('f') == my_f:
-                found = True
+            if published_bulletin.get('voter_id') == my_voter_id:
+                found_bulletin = published_bulletin
                 break
 
-        if found:
+        # Проверяем, был ли бюллетень некорректным при отправке
+        if not is_valid or is_attack:
             result_text = f"""
+🚨 БЮЛЛЕТЕНЬ БЫЛ НЕКОРРЕКТНЫМ ПРИ ОТПРАВКЕ!
+
+Ваш бюллетень был изменен перед отправкой (атака) или содержал ошибки.
+
+Детали:
+  ID избирателя: {my_voter_id}
+  Зашифрованный f: {my_f}
+  Затеняющий множитель q: {my_q}
+  Ваш выбор: {self.my_bulletin_data['choice_text']}
+  
+Причина некорректности: {validation_message if validation_message else 'Бюллетень был изменен перед отправкой (атака)'}
+
+⚠️ ВАЖНО: Этот бюллетень НЕ будет учтен при подсчете результатов голосования!
+
+Статус: Бюллетень был некорректен при отправке и не включен в подсчет.
+            """
+            messagebox.showerror("🚨 Бюллетень некорректен", result_text)
+            self.log(f"🚨 Бюллетень был некорректным при отправке: {validation_message}", "ERROR")
+            return
+
+        if found_bulletin:
+            published_f = found_bulletin.get('f')
+            
+            # Сравниваем f
+            if published_f == my_f:
+                # Бюллетень найден и f совпадает
+                result_text = f"""
 ✅ ВАШЕ ГОЛОСОВАНИЕ ВЕРИФИЦИРОВАНО
 
 Ваш выбор: {self.my_bulletin_data['choice_text']}
 Затеняющий множитель q: {my_q}
 Зашифрованный бюллетень f: {my_f}
 
-Статус: Ваше голосование найдено в опубликованной таблице бюллетеней
+Статус: Ваше голосование найдено в опубликованной таблице
 и включено в подсчет результатов.
 
 Время голосования: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-            """
-            messagebox.showinfo("Верификация успешна", result_text)
-            self.log("Голосование верифицировано в опубликованной таблице", "SUCCESS")
+                """
+                messagebox.showinfo("Верификация успешна", result_text)
+                self.log("Голосование верифицировано в опубликованной таблице", "SUCCESS")
+            else:
+                # 🚨 АТАКА ОБНАРУЖЕНА: бюллетень найден, но f изменен!
+                result_text = f"""
+🚨 АТАКА ОБНАРУЖЕНА! БЮЛЛЕТЕНЬ БЫЛ ИЗМЕНЕН СЕРВЕРОМ!
+
+Ваш оригинальный бюллетень:
+  ID избирателя: {my_voter_id}
+  Зашифрованный f: {my_f}
+  Затеняющий множитель q: {my_q}
+  Ваш выбор: {self.my_bulletin_data['choice_text']}
+
+Опубликованный сервером бюллетень:
+  ID избирателя: {found_bulletin.get('voter_id', 'N/A')}
+  Зашифрованный f: {published_f}
+  Время: {found_bulletin.get('timestamp', 'N/A')}
+
+⚠️ ВНИМАНИЕ: Значение f было изменено сервером!
+Оригинальный f: {my_f}
+Измененный f: {published_f}
+
+Ваш голос НЕ соответствует опубликованному бюллетеню!
+Это указывает на атаку или манипуляцию со стороны сервера.
+                """
+                messagebox.showerror("🚨 АТАКА ОБНАРУЖЕНА!", result_text)
+                self.log(f"🚨 АТАКА: Бюллетень был изменен! Оригинальный f={my_f}, опубликованный f={published_f}", "ERROR")
         else:
+            # Бюллетень вообще не найден
             messagebox.showerror("Верификация не пройдена",
-                               "Ваше голосование НЕ найдено в опубликованной таблице бюллетеней!\n"
-                               "Это может указывать на проблему с передачей данных.")
-            self.log("ОШИБКА: Голосование НЕ найдено в опубликованной таблице", "ERROR")
-    
+                               f"Ваше голосование НЕ найдено в опубликованной таблице бюллетеней!\n\n"
+                               f"Ваш ID: {my_voter_id}\n"
+                               f"Ваш f: {my_f}\n\n"
+                               f"Это может указывать на:\n"
+                               f"- Проблему с передачей данных\n"
+                               f"- Атаку на сервер\n"
+                               f"- Удаление вашего бюллетеня\n"
+                               f"- Бюллетень был некорректен и не был опубликован")
+            self.log(f"ОШИБКА: Голосование НЕ найдено в опубликованной таблице (ID: {my_voter_id}, f: {my_f})", "ERROR")
+
     def update_published_bulletins(self, bulletins: list):
         """Обновление списка опубликованных бюллетеней"""
         self.published_bulletins = bulletins  # ВАЖНО: сохраняем для проверки
