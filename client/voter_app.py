@@ -230,15 +230,26 @@ class VoterClient:
         ttk.Button(btn_frame, text="📊 Получить результаты",
                    command=self.get_results).pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(btn_frame, text="📑 Получить реестр",
-                   command=self.get_voters_registry).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(btn_frame, text="👀 Показать реестр",
-                   command=self.show_registry_local).pack(side=tk.LEFT, padx=5)
-        
         ttk.Button(btn_frame, text="✅ Проверить МОЙ голос",
                    command=self.verify_my_vote).pack(side=tk.LEFT, padx=5)
 
+        # Секция проверки чужого голоса
+        cross_verify_frame = ttk.LabelFrame(frame, text="Перекрестная проверка голосов", padding=10)
+        cross_verify_frame.pack(fill=tk.X, pady=10)
+
+        ttk.Label(cross_verify_frame, text="ID избирателя для проверки:").pack(anchor=tk.W, padx=5, pady=2)
+        
+        input_frame = ttk.Frame(cross_verify_frame)
+        input_frame.pack(fill=tk.X, padx=5, pady=2)
+        
+        self.verify_voter_id_entry = ttk.Entry(input_frame, width=30)
+        self.verify_voter_id_entry.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(input_frame, text="🔍 Проверить голос",
+                   command=self.verify_other_vote).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(input_frame, text="📋 Показать данные избирателя",
+                   command=self.show_voter_bulletin).pack(side=tk.LEFT, padx=5)
 
         # Таблица бюллетеней
         bulletins_frame = ttk.LabelFrame(frame, text="Опубликованные бюллетени", padding=5)
@@ -257,16 +268,17 @@ class VoterClient:
         self.bulletins_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Реестр избирателей
-        registry_frame = ttk.LabelFrame(frame, text="Реестр допущенных избирателей", padding=5)
+        # ИЗМЕНЕНИЕ: Реестр избирателей - только ID и ФИО (без "Допущен" и "Статус")
+        registry_frame = ttk.LabelFrame(frame, text="Реестр избирателей", padding=5)
         registry_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        reg_columns = ('ID', 'ФИО', 'Допущен', 'Статус')
+        # УБРАТЬ "Допущен" и "Статус", оставить только ID и ФИО
+        reg_columns = ('ID', 'ФИО')
         self.registry_tree = ttk.Treeview(registry_frame, columns=reg_columns, show='headings', height=8)
 
         for col in reg_columns:
             self.registry_tree.heading(col, text=col)
-            self.registry_tree.column(col, width=140 if col != 'ФИО' else 220)
+            self.registry_tree.column(col, width=200 if col == 'ID' else 300)
 
         reg_scrollbar = ttk.Scrollbar(registry_frame, orient=tk.VERTICAL, command=self.registry_tree.yview)
         self.registry_tree.configure(yscrollcommand=reg_scrollbar.set)
@@ -318,89 +330,6 @@ class VoterClient:
         self.log_text = scrolledtext.ScrolledText(frame, height=25)
         self.log_text.pack(fill=tk.BOTH, expand=True)
     
-    def setup_verification_tab(self, parent):
-        """Вкладка проверки"""
-        frame = ttk.LabelFrame(parent, text="Проверка результатов", padding=10)
-        frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-
-        # Кнопки получения данных
-        btn_frame = ttk.Frame(frame)
-        btn_frame.pack(fill=tk.X, pady=5)
-
-        ttk.Button(btn_frame, text="📋 Получить таблицу бюллетеней",
-                   command=self.get_published_data).pack(side=tk.LEFT, padx=5)
-
-        ttk.Button(btn_frame, text="📊 Получить результаты",
-                   command=self.get_results).pack(side=tk.LEFT, padx=5)
-
-        ttk.Button(btn_frame, text="📑 Получить реестр",
-                   command=self.get_voters_registry).pack(side=tk.LEFT, padx=5)
-
-        ttk.Button(btn_frame, text="👀 Показать реестр",
-                   command=self.show_registry_local).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(btn_frame, text="✅ Проверить МОЙ голос",
-                   command=self.verify_my_vote).pack(side=tk.LEFT, padx=5)
-
-        # Секция проверки чужого голоса
-        cross_verify_frame = ttk.LabelFrame(frame, text="Перекрестная проверка голосов", padding=10)
-        cross_verify_frame.pack(fill=tk.X, pady=10)
-
-        ttk.Label(cross_verify_frame, text="ID избирателя для проверки:").pack(anchor=tk.W, padx=5, pady=2)
-        
-        input_frame = ttk.Frame(cross_verify_frame)
-        input_frame.pack(fill=tk.X, padx=5, pady=2)
-        
-        self.verify_voter_id_entry = ttk.Entry(input_frame, width=30)
-        self.verify_voter_id_entry.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(input_frame, text="🔍 Проверить голос",
-                   command=self.verify_other_vote).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(input_frame, text="📋 Показать данные избирателя",
-                   command=self.show_voter_bulletin).pack(side=tk.LEFT, padx=5)
-
-        # Таблица бюллетеней
-        bulletins_frame = ttk.LabelFrame(frame, text="Опубликованные бюллетени", padding=5)
-        bulletins_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-
-        columns = ('ID избирателя', 'Зашифрованный бюллетень', 'Время')
-        self.bulletins_tree = ttk.Treeview(bulletins_frame, columns=columns, show='headings', height=8)
-
-        for col in columns:
-            self.bulletins_tree.heading(col, text=col)
-            self.bulletins_tree.column(col, width=200)
-
-        scrollbar = ttk.Scrollbar(bulletins_frame, orient=tk.VERTICAL, command=self.bulletins_tree.yview)
-        self.bulletins_tree.configure(yscrollcommand=scrollbar.set)
-
-        self.bulletins_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # Реестр избирателей
-        registry_frame = ttk.LabelFrame(frame, text="Реестр допущенных избирателей", padding=5)
-        registry_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-
-        reg_columns = ('ID', 'ФИО', 'Допущен', 'Статус')
-        self.registry_tree = ttk.Treeview(registry_frame, columns=reg_columns, show='headings', height=8)
-
-        for col in reg_columns:
-            self.registry_tree.heading(col, text=col)
-            self.registry_tree.column(col, width=150 if col != 'ФИО' else 220)
-
-        reg_scrollbar = ttk.Scrollbar(registry_frame, orient=tk.VERTICAL, command=self.registry_tree.yview)
-        self.registry_tree.configure(yscrollcommand=reg_scrollbar.set)
-
-        self.registry_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        reg_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # Результаты
-        results_frame = ttk.LabelFrame(frame, text="Результаты голосования", padding=5)
-        results_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-
-        self.results_text = scrolledtext.ScrolledText(results_frame, height=8)
-        self.results_text.pack(fill=tk.BOTH, expand=True)
-
     def log(self, message: str, level: str = "INFO"):
         """Логирование сообщений"""
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -820,12 +749,12 @@ ID: {self.voter.id}
         for entry in self.voters_registry:
             voter_id = entry.get('id', '')
             name = entry.get('name', '')
-            allowed = "✅" if (not self.eligible_voters or voter_id in self.eligible_voters) else "❌"
-            status = self.registry_status.get(voter_id, "❌ Не аутентифицировался")
-            self.registry_tree.insert('', tk.END, values=(voter_id, name, allowed, status))
+            # УБРАТЬ поля "Допущен" и "Статус"
+            self.registry_tree.insert('', tk.END, values=(voter_id, name))
 
     def update_published_bulletins(self, bulletins: list):
         """Обновление списка опубликованных бюллетеней"""
+        self.published_bulletins = bulletins  # ВАЖНО: сохраняем для проверки
         self.bulletins_tree.delete(*self.bulletins_tree.get_children())
 
         for bulletin in bulletins:
@@ -1389,51 +1318,6 @@ ID избирателя: {voter_id}
         btn_frame.pack(pady=10)
         
         ttk.Button(btn_frame, text="Закрыть", command=detail_window.destroy).pack(padx=5)
-    
-    def verify_my_vote(self):
-        """Проверка что мой голос присутствует в опубликованных результатах"""
-        if not self.my_bulletin_data:
-            messagebox.showwarning("Предупреждение", "Вы еще не голосовали или данные не сохранены")
-            return
-
-        if not self.published_bulletins:
-            messagebox.showwarning("Предупреждение", "Получите сначала опубликованные бюллетени")
-            return
-
-        my_f = self.my_bulletin_data['bulletin']['f']
-        my_choice = self.my_bulletin_data['choice']
-        my_q = self.my_bulletin_data['bulletin']['q']
-
-        # Ищем свой бюллетень в опубликованных
-        found = False
-        for published_bulletin in self.published_bulletins:
-            if published_bulletin.get('f') == my_f:
-                found = True
-                break
-
-        if found:
-            result_text = f"""
-✅ ВАШЕ ГОЛОСОВАНИЕ ВЕРИФИЦИРОВАНО
-
-Ваш выбор: {self.my_bulletin_data['choice_text']}
-Затеняющий множитель q: {my_q}
-Зашифрованный бюллетень f: {my_f}
-
-Статус: Ваше голосование найдено в опубликованной таблице бюллетеней
-и включено в подсчет результатов.
-
-Время голосования: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-
-ВАЖНО: Никто, кроме вас, не может определить ваш выбор,
-так как зашифрованный бюллетень защищен параметром q.
-            """
-            messagebox.showinfo("Верификация успешна", result_text)
-            self.log("Голосование верифицировано в опубликованной таблице", "SUCCESS")
-        else:
-            messagebox.showerror("Верификация не пройдена",
-                               "Ваше голосование НЕ найдено в опубликованной таблице бюллетеней!\n"
-                               "Это может указывать на проблему с передачей данных.")
-            self.log("ОШИБКА: Голосование НЕ найдено в опубликованной таблице", "ERROR")
     
     
 

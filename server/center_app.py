@@ -484,14 +484,18 @@ ID: {self.current_election.id}
                 pass
 
         for voter_id, voter in self.voters.items():
-            allowed = "✅" if (not self.allowed_voters or voter_id in self.allowed_voters) else "❌"
+            # ИЗМЕНЕНИЕ: "Допущен" показывает галочку только если пользователь 
+            # зарегистрирован (в self.voters) И аутентифицирован (в self.authenticated_voters)
+            is_registered = voter_id in self.voters
+            is_authenticated = voter_id in self.authenticated_voters
+            is_allowed = is_registered and is_authenticated
+            
+            allowed = "✅" if is_allowed else "❌"
             
             # Определяем детальный статус
-            if voter_id not in self.voters:
+            if not is_registered:
                 status = "❌ Не зарегистрирован"
-            elif voter_id not in self.allowed_voters:
-                status = "❌ Не допущен"
-            elif voter_id not in self.authenticated_voters:
+            elif not is_authenticated:
                 status = "📝 Зарегистрирован"
             elif voter.has_voted:
                 # Проверяем, не опоздал ли
@@ -857,6 +861,9 @@ R = {results['R']}
             }
         else:
             self.authenticated_voters.add(voter_id)
+            # ДОБАВИТЬ: обновляем список избирателей после аутентификации
+            self.root.after(0, self.update_voters_list)
+            
             response = {
                 'type': 'authenticate_response',
                 'success': True,
