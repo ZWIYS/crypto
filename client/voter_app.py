@@ -1032,7 +1032,7 @@ e: {bulletin_data.get('e', 'N/A')}
         # Сохраняем свои данные для проверки позже
         self.my_bulletin_data = {
             'bulletin': bulletin_data,
-            'signature': {'r': r, 's': 'H': H},
+            'signature': {'r': r, 's': s, 'H': H},
             'choice': choice,
             'choice_text': {1: "Воздержаться", 2: "За", 3: "Против"}.get(choice),
             'is_attack': self.attack_enabled.get()
