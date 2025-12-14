@@ -51,6 +51,7 @@ class Election:
     d: int  # Закрытая экспонента RSA (только у Центра)
     start_time: str
     end_time: str
+    duration_minutes: int = 60  # Длительность голосования в минутах (по умолчанию 60)
     is_active: bool = False
     results: Optional[Dict[str, Any]] = None
 

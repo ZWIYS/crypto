@@ -161,6 +161,12 @@ class CenterServer:
         self.election_desc = ttk.Entry(create_frame, width=40)
         self.election_desc.grid(row=1, column=1, padx=5, pady=2, sticky=tk.W)
 
+        # ДОБАВИТЬ ЭТО:
+        ttk.Label(create_frame, text="Длительность (минуты):").grid(row=2, column=0, sticky=tk.W, padx=5)
+        self.election_duration = ttk.Entry(create_frame, width=40)
+        self.election_duration.insert(0, "60")  # По умолчанию 60 минут
+        self.election_duration.grid(row=2, column=1, padx=5, pady=2, sticky=tk.W)
+
         # Информация о текущих выборах
         info_frame = ttk.LabelFrame(frame, text="Текущие выборы", padding=10)
         info_frame.pack(fill=tk.BOTH, expand=True, pady=10)
@@ -351,6 +357,15 @@ class CenterServer:
             messagebox.showwarning("Предупреждение", "Введите название выборов")
             return
 
+        # Получаем длительность
+        try:
+            duration_minutes = int(self.election_duration.get().strip() or "60")
+            if duration_minutes <= 0:
+                raise ValueError("Длительность должна быть положительным числом")
+        except ValueError as e:
+            messagebox.showerror("Ошибка", f"Неверная длительность: {e}")
+            return
+
         self.current_election = Election(
             id=f"election_{int(time.time())}",
             title=title,
@@ -360,6 +375,7 @@ class CenterServer:
             d=self.rsa_keys['d'],
             start_time="",
             end_time="",
+            duration_minutes=duration_minutes,  # ДОБАВИТЬ
             is_active=False
         )
 
@@ -368,6 +384,7 @@ class CenterServer:
 Название: {self.current_election.title}
 ID: {self.current_election.id}
 Описание: {self.current_election.description}
+Длительность: {self.current_election.duration_minutes} минут
 Статус: Не начаты
 Параметры RSA: m={self.current_election.m}, e={self.current_election.e}
         """
@@ -375,14 +392,22 @@ ID: {self.current_election.id}
         self.election_info.insert(tk.END, info)
 
         self.start_btn.config(state=tk.NORMAL)
-        self.log(f"Созданы выборы: {title}")
+        self.log(f"Созданы выборы: {title} (длительность: {duration_minutes} минут)")
 
     def start_election(self):
         """Начало голосования"""
         if not self.current_election:
             return
 
-        self.current_election.start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        from datetime import timedelta
+        
+        start_dt = datetime.now()
+        self.current_election.start_time = start_dt.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Вычисляем время окончания на основе длительности
+        end_dt = start_dt + timedelta(minutes=self.current_election.duration_minutes)
+        self.current_election.end_time = end_dt.strftime("%Y-%m-%d %H:%M:%S")
+        
         self.current_election.is_active = True
 
         # Публикуем реестр допущенных избирателей
@@ -392,7 +417,7 @@ ID: {self.current_election.id}
         self.end_btn.config(state=tk.NORMAL)
         self.calc_btn.config(state=tk.NORMAL)
 
-        self.log("Голосование начато")
+        self.log(f"Голосование начато. Окончание: {self.current_election.end_time}")
         self.broadcast_message({
             'type': 'election_started',
             'election': self.current_election.to_dict(),
@@ -447,9 +472,49 @@ ID: {self.current_election.id}
         """Обновление списка избирателей"""
         self.voters_tree.delete(*self.voters_tree.get_children())
 
+        from datetime import datetime
+        
+        # Получаем время окончания выборов, если они активны
+        election_ended = False
+        if self.current_election and self.current_election.end_time:
+            try:
+                end_time = datetime.strptime(self.current_election.end_time, "%Y-%m-%d %H:%M:%S")
+                election_ended = datetime.now() > end_time
+            except:
+                pass
+
         for voter_id, voter in self.voters.items():
             allowed = "✅" if (not self.allowed_voters or voter_id in self.allowed_voters) else "❌"
-            status = "✅ Проголосовал" if voter.has_voted else ("✅ Аутентифицировался" if voter_id in self.authenticated_voters else "❌ Не аутентифицировался")
+            
+            # Определяем детальный статус
+            if voter_id not in self.voters:
+                status = "❌ Не зарегистрирован"
+            elif voter_id not in self.allowed_voters:
+                status = "❌ Не допущен"
+            elif voter_id not in self.authenticated_voters:
+                status = "📝 Зарегистрирован"
+            elif voter.has_voted:
+                # Проверяем, не опоздал ли
+                if election_ended and self.current_election:
+                    # Проверяем время голосования из бюллетеня
+                    voter_bulletin = next((b for b in self.bulletins if b.voter_id == voter_id), None)
+                    if voter_bulletin:
+                        try:
+                            vote_time = datetime.strptime(voter_bulletin.timestamp, "%Y-%m-%d %H:%M:%S")
+                            end_time = datetime.strptime(self.current_election.end_time, "%Y-%m-%d %H:%M:%S")
+                            if vote_time > end_time:
+                                status = "⏰ Опоздал"
+                            else:
+                                status = "✅ Проголосовал"
+                        except:
+                            status = "✅ Проголосовал"
+                    else:
+                        status = "✅ Проголосовал"
+                else:
+                    status = "✅ Проголосовал"
+            else:
+                status = "�� Аутентифицирован"
+            
             self.voters_tree.insert('', tk.END, values=(
                 voter.id,
                 voter.name,
@@ -834,49 +899,68 @@ R = {results['R']}
                 'message': 'Голосование не активно'
             }
         else:
-            # Проверяем бюллетень
-            is_valid, msg = VotingCrypto.verify_bulletin(
-                bulletin_data,
-                self.current_election.m,
-                self.current_election.e
-            )
-
-            if not is_valid:
+            # ДОБАВИТЬ ПРОВЕРКУ ВРЕМЕНИ
+            from datetime import datetime
+            current_time = datetime.now()
+            end_time = datetime.strptime(self.current_election.end_time, "%Y-%m-%d %H:%M:%S")
+            
+            is_late = current_time > end_time
+            
+            if is_late:
                 response = {
                     'type': 'submit_response',
                     'success': False,
-                    'message': f'Неверный бюллетень: {msg}'
+                    'message': f'Голосование завершено. Время окончания: {self.current_election.end_time}'
                 }
             else:
-                # Создаем объект бюллетеня
-                bulletin = Bulletin(
-                    voter_id=voter_id,
-                    encrypted_data=bulletin_data,
-                    signature=signature,
-                    timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # Проверяем бюллетень
+                is_valid, msg = VotingCrypto.verify_bulletin(
+                    bulletin_data,
+                    self.current_election.m,
+                    self.current_election.e
                 )
 
-                # Добавляем бюллетень
-                self.bulletins.append(bulletin)
+                if not is_valid:
+                    response = {
+                        'type': 'submit_response',
+                        'success': False,
+                        'message': f'Неверный бюллетень: {msg}'
+                    }
+                else:
+                    # Создаем объект бюллетеня
+                    bulletin = Bulletin(
+                        voter_id=voter_id,
+                        encrypted_data=bulletin_data,
+                        signature=signature,
+                        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    )
 
-                # Обновляем избирателя
-                self.voters[voter_id].has_voted = True
-                self.voters[voter_id].bulletin_hash = hashlib.sha256(
-                    json.dumps(bulletin_data, sort_keys=True).encode()
-                ).hexdigest()
+                    # Добавляем бюллетень
+                    self.bulletins.append(bulletin)
 
-                # Обновляем GUI
-                self.root.after(0, self.update_bulletins_list)
-                self.root.after(0, self.update_voters_list)
+                    # Обновляем избирателя
+                    self.voters[voter_id].has_voted = True
+                    self.voters[voter_id].bulletin_hash = hashlib.sha256(
+                        json.dumps(bulletin_data, sort_keys=True).encode()
+                    ).hexdigest()
+                    
+                    # Помечаем как опоздавшего, если голосовал после окончания
+                    # (хотя мы уже отклонили такие голоса, но на всякий случай)
+                    if is_late:
+                        self.voters[voter_id].is_late = True
 
-                response = {
-                    'type': 'submit_response',
-                    'success': True,
-                    'message': 'Бюллетень принят',
-                    'bulletin_id': len(self.bulletins)
-                }
+                    # Обновляем GUI
+                    self.root.after(0, self.update_bulletins_list)
+                    self.root.after(0, self.update_voters_list)
 
-                self.log(f"Принят бюллетень от избирателя {voter_id}")
+                    response = {
+                        'type': 'submit_response',
+                        'success': True,
+                        'message': 'Бюллетень принят',
+                        'bulletin_id': len(self.bulletins)
+                    }
+
+                    self.log(f"Принят бюллетень от избирателя {voter_id}")
 
         MessageProtocol.send_message(client_socket, response)
 
