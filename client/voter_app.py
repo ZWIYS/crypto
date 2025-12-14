@@ -208,6 +208,27 @@ class VoterClient:
                                    command=self.cast_vote, width=20, state=tk.DISABLED)
         self.vote_btn.pack()
 
+        # ДОБАВИТЬ: Секция для атаки
+        attack_frame = ttk.LabelFrame(frame, text="⚠️ АТАКА: Отправка некорректного бюллетеня", padding=10)
+        attack_frame.pack(fill=tk.X, pady=10)
+
+        self.attack_enabled = tk.BooleanVar(value=False)
+        ttk.Checkbutton(attack_frame, text="Включить атаку (отправить некорректный бюллетень)",
+                       variable=self.attack_enabled).pack(anchor=tk.W, pady=2)
+
+        attack_type_frame = ttk.Frame(attack_frame)
+        attack_type_frame.pack(fill=tk.X, pady=5)
+
+        self.attack_type = tk.StringVar(value="invalid_f")
+        ttk.Radiobutton(attack_type_frame, text="Некорректное f", variable=self.attack_type, 
+                       value="invalid_f").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(attack_type_frame, text="Некорректный choice", variable=self.attack_type,
+                       value="invalid_choice").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(attack_type_frame, text="Некорректные параметры RSA", variable=self.attack_type,
+                       value="invalid_rsa").pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(attack_type_frame, text="Нарушить вычисления", variable=self.attack_type,
+                       value="broken_calc").pack(side=tk.LEFT, padx=5)
+
         # Информация о бюллетене
         bulletin_frame = ttk.LabelFrame(frame, text="Сгенерированный бюллетень", padding=10)
         bulletin_frame.pack(fill=tk.BOTH, expand=True, pady=5)
@@ -946,16 +967,48 @@ e: {bulletin_data.get('e', 'N/A')}
                 e=self.election.e
             )
 
-            # Проверяем бюллетень
-            is_valid, msg = VotingCrypto.verify_bulletin(
-                bulletin_data,
-                self.election.m,
-                self.election.e
-            )
+            # ДОБАВИТЬ: Применяем атаку, если включена
+            if self.attack_enabled.get():
+                attack_type = self.attack_type.get()
+                if attack_type == "invalid_f":
+                    # Изменяем f на некорректное значение
+                    original_f = bulletin_data['f']
+                    bulletin_data['f'] = (original_f * 999) % self.election.m
+                    self.log(f"⚠️ АТАКА: Отправка некорректного f (было {original_f}, стало {bulletin_data['f']})", "WARNING")
+                    
+                elif attack_type == "invalid_choice":
+                    # Изменяем choice на недопустимое значение
+                    bulletin_data['choice'] = 999
+                    self.log(f"⚠️ АТАКА: Отправка некорректного choice (999)", "WARNING")
+                    
+                elif attack_type == "invalid_rsa":
+                    # Изменяем параметры RSA
+                    bulletin_data['m'] = self.election.m + 1
+                    bulletin_data['e'] = self.election.e + 1
+                    self.log(f"⚠️ АТАКА: Отправка некорректных параметров RSA", "WARNING")
+                    
+                elif attack_type == "broken_calc":
+                    # Нарушаем вычисления: изменяем t, но не пересчитываем f
+                    bulletin_data['t'] = bulletin_data['t'] + 1000
+                    self.log(f"⚠️ АТАКА: Нарушены вычисления (t изменен, f не пересчитан)", "WARNING")
 
-            if not is_valid:
-                messagebox.showerror("Ошибка", f"Неверный бюллетень: {msg}")
-                return
+            # Проверяем бюллетень (если атака не включена)
+            if not self.attack_enabled.get():
+                is_valid, msg = VotingCrypto.verify_bulletin(
+                    bulletin_data,
+                    self.election.m,
+                    self.election.e
+                )
+
+                if not is_valid:
+                    messagebox.showerror("Ошибка", f"Неверный бюллетень: {msg}")
+                    return
+            else:
+                # Если атака включена, показываем предупреждение
+                messagebox.showwarning("⚠️ АТАКА АКТИВНА",
+                                     f"Отправляется некорректный бюллетень!\n"
+                                     f"Тип атаки: {attack_type}\n"
+                                     f"Сервер должен отклонить этот бюллетень.")
 
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка создания бюллетеня: {e}")
@@ -979,9 +1032,10 @@ e: {bulletin_data.get('e', 'N/A')}
         # Сохраняем свои данные для проверки позже
         self.my_bulletin_data = {
             'bulletin': bulletin_data,
-            'signature': {'r': r, 's': s, 'H': H},
+            'signature': {'r': r, 's': 'H': H},
             'choice': choice,
-            'choice_text': {1: "Воздержаться", 2: "За", 3: "Против"}.get(choice)
+            'choice_text': {1: "Воздержаться", 2: "За", 3: "Против"}.get(choice),
+            'is_attack': self.attack_enabled.get()
         }
 
         # Отправляем бюллетень
@@ -997,7 +1051,7 @@ e: {bulletin_data.get('e', 'N/A')}
         self.update_bulletin_info(bulletin_data, {'r': r, 's': s, 'H': H})
 
         # Блокируем кнопку
-        self.vote_btn.config(state=tk.DISABLED, text="📤 Отправка...")
+        self.vote_btn.config(state=tk.DISABLED, text="�� Отправка...")
 
     def get_published_data(self):
         """Запрос опубликованных данных"""
