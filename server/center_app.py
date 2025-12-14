@@ -243,13 +243,16 @@ class CenterServer:
         frame = ttk.LabelFrame(parent, text="Полученные бюллетени", padding=10)
         frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Таблица бюллетеней
-        columns = ('ID избирателя', 'Зашифрованный f', 'Подпись', 'Время')
+        # Таблица бюллетеней - ДОБАВИТЬ колонку "Статус проверки"
+        columns = ('ID избирателя', 'Зашифрованный f', 'Статус проверки', 'Подпись', 'Время')
         self.bulletins_tree = ttk.Treeview(frame, columns=columns, show='headings', height=15)
 
         for col in columns:
             self.bulletins_tree.heading(col, text=col)
-            self.bulletins_tree.column(col, width=200)
+            if col == 'Статус проверки':
+                self.bulletins_tree.column(col, width=150)
+            else:
+                self.bulletins_tree.column(col, width=200)
 
         scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self.bulletins_tree.yview)
         self.bulletins_tree.configure(yscrollcommand=scrollbar.set)
@@ -267,8 +270,38 @@ class CenterServer:
         ttk.Button(btn_frame, text="✅ Проверить подписи",
                    command=self.verify_signatures).pack(side=tk.LEFT, padx=5)
 
+        ttk.Button(btn_frame, text="🔍 Проверить все бюллетени",
+                   command=self.verify_all_bulletins).pack(side=tk.LEFT, padx=5)
+
         ttk.Button(btn_frame, text="💾 Экспорт бюллетеней",
                    command=self.export_bulletins).pack(side=tk.LEFT, padx=5)
+
+        # ДОБАВИТЬ: Секция для атаки
+        attack_frame = ttk.LabelFrame(frame, text="⚠️ АТАКА: Изменение бюллетеня", padding=10)
+        attack_frame.pack(fill=tk.X, pady=10)
+
+        ttk.Label(attack_frame, text="ID избирателя для атаки:").grid(row=0, column=0, sticky=tk.W, padx=5)
+        self.attack_voter_id_entry = ttk.Entry(attack_frame, width=20)
+        self.attack_voter_id_entry.grid(row=0, column=1, padx=5, pady=2)
+
+        attack_btn_frame = ttk.Frame(attack_frame)
+        attack_btn_frame.grid(row=1, column=0, columnspan=2, pady=5)
+
+        ttk.Button(attack_btn_frame, text="🔓 Изменить значение f",
+                   command=self.attack_modify_bulletin_f).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(attack_btn_frame, text="🔓 Изменить choice",
+                   command=self.attack_modify_bulletin_choice).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(attack_btn_frame, text="🔓 Нарушить проверку",
+                   command=self.attack_break_verification).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(attack_btn_frame, text="🔓 Изменить параметры RSA",
+                   command=self.attack_modify_rsa_params).pack(side=tk.LEFT, padx=5)
+
+        self.attack_enabled = tk.BooleanVar(value=False)
+        ttk.Checkbutton(attack_frame, text="Включить автоматическую атаку при получении",
+                       variable=self.attack_enabled).grid(row=2, column=0, columnspan=2, pady=5)
 
     def setup_results_tab(self, parent):
         """Вкладка результатов"""
@@ -534,12 +567,17 @@ ID: {self.current_election.id}
         for bulletin in self.bulletins:
             self.published_data.append({
                 'voter_id': bulletin.voter_id,
-                'f': bulletin.encrypted_data.get('f'),
+                'f': bulletin.encrypted_data.get('f'),  # Используем актуальное значение f (может быть изменено атакой)
                 'signature': bulletin.signature,
                 'timestamp': bulletin.timestamp
             })
 
         self.log(f"Опубликована таблица из {len(self.bulletins)} бюллетеней")
+        
+        # Показываем предупреждение, если есть измененные бюллетени
+        modified_count = sum(1 for b in self.bulletins if not b.is_valid)
+        if modified_count > 0:
+            self.log(f"⚠️ ВНИМАНИЕ: В опубликованной таблице {modified_count} измененных бюллетеней!", "WARNING")
 
         self.broadcast_message({
             'type': 'bulletins_published',
@@ -552,15 +590,47 @@ ID: {self.current_election.id}
             messagebox.showwarning("Предупреждение", "Нет бюллетеней для подсчета")
             return
 
-        # Преобразуем бюллетени
-        bulletins_data = [b.encrypted_data for b in self.bulletins]
+        if not self.current_election:
+            messagebox.showwarning("Предупреждение", "Нет активных выборов")
+            return
 
-        # Выполняем подсчет
+        # ИЗМЕНЕНИЕ: Фильтруем только корректные бюллетени
+        valid_bulletins = []
+        invalid_bulletins = []
+        
+        for bulletin in self.bulletins:
+            # Проверяем бюллетень
+            is_valid, msg = VotingCrypto.verify_bulletin(
+                bulletin.encrypted_data,
+                self.current_election.m,
+                self.current_election.e
+            )
+            
+            # Обновляем статус
+            bulletin.is_valid = is_valid
+            if not is_valid:
+                bulletin.validation_message = msg
+            
+            if is_valid:
+                valid_bulletins.append(bulletin.encrypted_data)
+            else:
+                invalid_bulletins.append(bulletin)
+                self.log(f"❌ Некорректный бюллетень от {bulletin.voter_id} исключен из подсчета: {msg}", "WARNING")
+
+        # Выполняем подсчет только для корректных бюллетеней
+        if not valid_bulletins:
+            messagebox.showwarning("Предупреждение", "Нет корректных бюллетеней для подсчета")
+            return
+
         results = VotingCrypto.calculate_voting_results(
-            bulletins_data,
+            valid_bulletins,
             self.current_election.m,
             self.current_election.d
         )
+
+        # Добавляем информацию о некорректных бюллетенях
+        results['invalid_count'] = len(invalid_bulletins)
+        results['invalid_bulletins'] = [b.voter_id for b in invalid_bulletins]
 
         self.current_election.results = results
 
@@ -569,8 +639,11 @@ ID: {self.current_election.id}
 {'=' * 60}
 {'РЕЗУЛЬТАТЫ ГОЛОСОВАНИЯ'.center(60)}
 {'=' * 60}
-Всего избирателей: {results['total']}
-Проголосовали: {results['for'] + results['against'] + results['abstained']}
+Всего получено бюллетеней: {len(self.bulletins)}
+✅ Корректных бюллетеней: {len(valid_bulletins)}
+❌ Некорректных бюллетеней: {len(invalid_bulletins)}
+
+Проголосовали (учтено): {results['for'] + results['against'] + results['abstained']}
 
 Голоса "ЗА": {results['for']}
 Голоса "ПРОТИВ": {results['against']}
@@ -582,11 +655,14 @@ Q = {results['Q']}
 R = {results['R']}
 {'=' * 60}
         """
+        
+        if invalid_bulletins:
+            results_text += f"\n❌ ВНИМАНИЕ: {len(invalid_bulletins)} некорректных бюллетеней не учтены в подсчете!"
 
         self.results_text.delete(1.0, tk.END)
         self.results_text.insert(tk.END, results_text)
 
-        self.log("Результаты голосования подсчитаны")
+        self.log(f"Результаты голосования подсчитаны. Корректных: {len(valid_bulletins)}, Некорректных: {len(invalid_bulletins)}")
 
     def publish_results(self):
         """Публикация результатов голосования"""
@@ -747,7 +823,7 @@ R = {results['R']}
                 self.log(f"Получено от {client_id}: {message.get('type')}")
 
                 # Обрабатываем сообщение в основном потоке
-                self.root.after(0, lambda: self.process_client_message(client_socket, message))
+                self.root.after(0, lambda m=message: self.process_client_message(client_socket, m))
 
         except Exception as e:
             self.log(f"Ошибка обработки клиента {client_id}: {e}", "ERROR")
@@ -861,7 +937,7 @@ R = {results['R']}
             }
         else:
             self.authenticated_voters.add(voter_id)
-            # ДОБАВИТЬ: обновляем список избирателей после аутентификации
+            # Обновляем список избирателей после аутентификации
             self.root.after(0, self.update_voters_list)
             
             response = {
@@ -874,6 +950,284 @@ R = {results['R']}
             }
 
         MessageProtocol.send_message(client_socket, response)
+
+    def verify_all_bulletins(self):
+        """Проверка всех бюллетеней на корректность"""
+        if not self.bulletins:
+            messagebox.showinfo("Информация", "Нет бюллетеней для проверки")
+            return
+
+        if not self.current_election:
+            messagebox.showwarning("Предупреждение", "Нет активных выборов")
+            return
+
+        valid_count = 0
+        invalid_count = 0
+
+        for bulletin in self.bulletins:
+            is_valid, msg = VotingCrypto.verify_bulletin(
+                bulletin.encrypted_data,
+                self.current_election.m,
+                self.current_election.e
+            )
+
+            # Обновляем статус бюллетеня
+            bulletin.is_valid = is_valid
+            bulletin.validation_message = msg
+
+            if is_valid:
+                valid_count += 1
+            else:
+                invalid_count += 1
+                self.log(f"❌ Некорректный бюллетень от {bulletin.voter_id}: {msg}", "ERROR")
+
+        # Обновляем отображение
+        self.root.after(0, self.update_bulletins_list)
+
+        messagebox.showinfo("Результаты проверки",
+                          f"Проверено бюллетеней: {len(self.bulletins)}\n"
+                          f"✅ Корректных: {valid_count}\n"
+                          f"❌ Некорректных: {invalid_count}")
+
+    def attack_modify_bulletin_f(self):
+        """Атака: изменение зашифрованного значения f в бюллетене"""
+        voter_id = self.attack_voter_id_entry.get().strip()
+        
+        if not voter_id:
+            messagebox.showwarning("Предупреждение", "Введите ID избирателя")
+            return
+        
+        # Ищем бюллетень
+        bulletin = next((b for b in self.bulletins if b.voter_id == voter_id), None)
+        if not bulletin:
+            messagebox.showwarning("Предупреждение", f"Бюллетень избирателя {voter_id} не найден")
+            return
+        
+        # Изменяем значение f на случайное, гарантированно неправильное
+        original_f = bulletin.encrypted_data.get('f')
+        import random
+        # Генерируем случайное значение, которое точно не будет правильным
+        new_f = random.randint(1, self.current_election.m - 1)
+        while new_f == original_f:
+            new_f = random.randint(1, self.current_election.m - 1)
+        
+        bulletin.encrypted_data['f'] = new_f
+        
+        # ВАЖНО: Обновляем в опубликованных данных, если они уже опубликованы
+        for pub_data in self.published_data:
+            if pub_data.get('voter_id') == voter_id:
+                pub_data['f'] = new_f
+                self.log(f"⚠️ АТАКА: Обновлен f в опубликованных данных для {voter_id} ({original_f} -> {new_f})", "WARNING")
+        
+        # Помечаем как измененный на сервере (не просто ошибка)
+        bulletin.is_valid = False
+        bulletin.validation_message = f"⚠️ ИЗМЕНЕНО НА СЕРВЕРЕ: f изменен с {original_f} на {new_f}"
+        
+        # Перепроверяем для подтверждения
+        is_valid, msg = VotingCrypto.verify_bulletin(
+            bulletin.encrypted_data,
+            self.current_election.m,
+            self.current_election.e
+        )
+        # Сохраняем специальное сообщение об изменении на сервере
+        if not is_valid:
+            bulletin.validation_message = f"⚠️ ИЗМЕНЕНО НА СЕРВЕРЕ: f изменен с {original_f} на {new_f}"
+        
+        self.log(f"⚠️ АТАКА: Изменен бюллетень избирателя {voter_id} (f: {original_f} -> {new_f})", "WARNING")
+        messagebox.showwarning("Атака выполнена", 
+                             f"Бюллетень избирателя {voter_id} изменен!\n"
+                             f"Оригинальный f: {original_f}\n"
+                             f"Новый f: {new_f}\n\n"
+                             f"Проверка: {'❌ НЕ ПРОШЛА' if not is_valid else '⚠️ ПРОШЛА (ОШИБКА!)'}\n\n"
+                             f"⚠️ Клиент обнаружит изменение при проверке!")
+        
+        # Обновляем GUI
+        self.root.after(0, self.update_bulletins_list)
+        
+        # Если таблица уже опубликована, отправляем обновление клиентам
+        if self.published_data:
+            self.broadcast_message({
+                'type': 'bulletins_published',
+                'data': self.published_data
+            })
+            self.log(f"⚠️ АТАКА: Отправлено обновление опубликованной таблицы с измененным бюллетенем", "WARNING")
+
+    def attack_modify_bulletin_choice(self):
+        """Атака: изменение choice в бюллетене"""
+        voter_id = self.attack_voter_id_entry.get().strip()
+        
+        if not voter_id:
+            messagebox.showwarning("Предупреждение", "Введите ID избирателя")
+            return
+        
+        bulletin = next((b for b in self.bulletins if b.voter_id == voter_id), None)
+        if not bulletin:
+            messagebox.showwarning("Предупреждение", f"Бюллетень избирателя {voter_id} не найден")
+            return
+        
+        # Изменяем choice и f для саботажа
+        original_choice = bulletin.encrypted_data.get('choice')
+        original_f = bulletin.encrypted_data.get('f')
+        original_t = bulletin.encrypted_data.get('t')
+        new_choice = (original_choice % 3) + 1  # Меняем на другой вариант
+        
+        bulletin.encrypted_data['choice'] = new_choice
+        
+        # Также изменяем f, чтобы клиент точно обнаружил изменение
+        import random
+        new_f = random.randint(1, self.current_election.m - 1)
+        while new_f == original_f:
+            new_f = random.randint(1, self.current_election.m - 1)
+        bulletin.encrypted_data['f'] = new_f
+        
+        # Обновляем в опубликованных данных
+        for pub_data in self.published_data:
+            if pub_data.get('voter_id') == voter_id:
+                pub_data['f'] = new_f
+                self.log(f"⚠️ АТАКА: Обновлен f в опубликованных данных для {voter_id}", "WARNING")
+        
+        # Перепроверяем
+        is_valid, msg = VotingCrypto.verify_bulletin(
+            bulletin.encrypted_data,
+            self.current_election.m,
+            self.current_election.e
+        )
+        bulletin.is_valid = is_valid
+        bulletin.validation_message = f"⚠️ ИЗМЕНЕНО НА СЕРВЕРЕ: choice изменен с {original_choice} на {new_choice}, f изменен с {original_f} на {new_f}"
+        
+        self.log(f"⚠️ АТАКА: Изменен choice в бюллетене {voter_id} ({original_choice} -> {new_choice}), f изменен", "WARNING")
+        messagebox.showwarning("Атака выполнена",
+                             f"Choice изменен с {original_choice} на {new_choice}\n"
+                             f"f изменен с {original_f} на {new_f}\n\n"
+                             f"Проверка: {'❌ НЕ ПРОШЛА' if not is_valid else '⚠️ ПРОШЛА (ОШИБКА!)'}")
+        
+        self.root.after(0, self.update_bulletins_list)
+        
+        # Если таблица уже опубликована, отправляем обновление клиентам
+        if self.published_data:
+            self.broadcast_message({
+                'type': 'bulletins_published',
+                'data': self.published_data
+            })
+            self.log(f"⚠️ АТАКА: Отправлено обновление опубликованной таблицы с измененным бюллетенем", "WARNING")
+
+    def attack_break_verification(self):
+        """Атака: нарушение проверки путем изменения параметров"""
+        voter_id = self.attack_voter_id_entry.get().strip()
+        
+        if not voter_id:
+            messagebox.showwarning("Предупреждение", "Введите ID избирателя")
+            return
+        
+        bulletin = next((b for b in self.bulletins if b.voter_id == voter_id), None)
+        if not bulletin:
+            messagebox.showwarning("Предупреждение", f"Бюллетень избирателя {voter_id} не найден")
+            return
+        
+        # Изменяем параметр m и f
+        original_m = bulletin.encrypted_data.get('m')
+        original_f = bulletin.encrypted_data.get('f')
+        bulletin.encrypted_data['m'] = original_m + 1  # Делаем неверным
+        
+        # Также изменяем f
+        import random
+        new_f = random.randint(1, self.current_election.m - 1)
+        while new_f == original_f:
+            new_f = random.randint(1, self.current_election.m - 1)
+        bulletin.encrypted_data['f'] = new_f
+        
+        # Обновляем в опубликованных данных
+        for pub_data in self.published_data:
+            if pub_data.get('voter_id') == voter_id:
+                pub_data['f'] = new_f
+                self.log(f"⚠️ АТАКА: Обновлен f в опубликованных данных для {voter_id}", "WARNING")
+        
+        # Перепроверяем
+        is_valid, msg = VotingCrypto.verify_bulletin(
+            bulletin.encrypted_data,
+            self.current_election.m,
+            self.current_election.e
+        )
+        bulletin.is_valid = is_valid
+        bulletin.validation_message = f"⚠️ ИЗМЕНЕНО НА СЕРВЕРЕ: параметр m изменен с {original_m} на {bulletin.encrypted_data['m']}, f изменен с {original_f} на {new_f}"
+        
+        self.log(f"⚠️ АТАКА: Нарушена проверка бюллетеня {voter_id} (m: {original_m} -> {bulletin.encrypted_data['m']}, f изменен)", "WARNING")
+        messagebox.showwarning("Атака выполнена",
+                             f"Параметр m изменен:\n"
+                             f"Было: {original_m}\n"
+                             f"Стало: {bulletin.encrypted_data['m']}\n"
+                             f"f изменен с {original_f} на {new_f}\n\n"
+                             f"Проверка: {'❌ НЕ ПРОШЛА' if not is_valid else '⚠️ ПРОШЛА (ОШИБКА!)'}\n"
+                             f"Ошибка: {msg}")
+        
+        self.root.after(0, self.update_bulletins_list)
+        
+        # Если таблица уже опубликована, отправляем обновление клиентам
+        if self.published_data:
+            self.broadcast_message({
+                'type': 'bulletins_published',
+                'data': self.published_data
+            })
+            self.log(f"⚠️ АТАКА: Отправлено обновление опубликованной таблицы с измененным бюллетенем", "WARNING")
+
+    def attack_modify_rsa_params(self):
+        """Атака: изменение параметров RSA"""
+        voter_id = self.attack_voter_id_entry.get().strip()
+        
+        if not voter_id:
+            messagebox.showwarning("Предупреждение", "Введите ID избирателя")
+            return
+        
+        bulletin = next((b for b in self.bulletins if b.voter_id == voter_id), None)
+        if not bulletin:
+            messagebox.showwarning("Предупреждение", f"Бюллетень избирателя {voter_id} не найден")
+            return
+        
+        # Изменяем параметры RSA и f
+        original_f = bulletin.encrypted_data.get('f')
+        bulletin.encrypted_data['m'] = original_m + 100
+        bulletin.encrypted_data['e'] = original_e + 1
+        
+        # Также изменяем f
+        import random
+        new_f = random.randint(1, self.current_election.m - 1)
+        while new_f == original_f:
+            new_f = random.randint(1, self.current_election.m - 1)
+        bulletin.encrypted_data['f'] = new_f
+        
+        # Обновляем в опубликованных данных
+        for pub_data in self.published_data:
+            if pub_data.get('voter_id') == voter_id:
+                pub_data['f'] = new_f
+                self.log(f"⚠️ АТАКА: Обновлен f в опубликованных данных для {voter_id}", "WARNING")
+        
+        # Перепроверяем
+        is_valid, msg = VotingCrypto.verify_bulletin(
+            bulletin.encrypted_data,
+            self.current_election.m,
+            self.current_election.e
+        )
+        bulletin.is_valid = is_valid
+        bulletin.validation_message = f"⚠️ ИЗМЕНЕНО НА СЕРВЕРЕ: параметры RSA изменены (m: {original_m} -> {bulletin.encrypted_data['m']}, e: {original_e} -> {bulletin.encrypted_data['e']}), f изменен с {original_f} на {new_f}"
+        
+        self.log(f"⚠️ АТАКА: Изменены параметры RSA в бюллетене {voter_id}", "WARNING")
+        messagebox.showwarning("Атака выполнена",
+                             f"Параметры RSA изменены:\n"
+                             f"m: {original_m} -> {bulletin.encrypted_data['m']}\n"
+                             f"e: {original_e} -> {bulletin.encrypted_data['e']}\n"
+                             f"f изменен с {original_f} на {new_f}\n\n"
+                             f"Проверка: {'❌ НЕ ПРОШЛА' if not is_valid else '⚠️ ПРОШЛА (ОШИБКА!)'}\n"
+                             f"Ошибка: {msg}")
+        
+        self.root.after(0, self.update_bulletins_list)
+        
+        # Если таблица уже опубликована, отправляем обновление клиентам
+        if self.published_data:
+            self.broadcast_message({
+                'type': 'bulletins_published',
+                'data': self.published_data
+            })
+            self.log(f"⚠️ АТАКА: Отправлено обновление опубликованной таблицы с измененным бюллетенем", "WARNING")
 
     def handle_submit_bulletin(self, client_socket, message):
         """Обработка отправки бюллетеня"""
@@ -906,7 +1260,7 @@ R = {results['R']}
                 'message': 'Голосование не активно'
             }
         else:
-            # ДОБАВИТЬ ПРОВЕРКУ ВРЕМЕНИ
+            # Проверка времени
             from datetime import datetime
             current_time = datetime.now()
             end_time = datetime.strptime(self.current_election.end_time, "%Y-%m-%d %H:%M:%S")
@@ -920,26 +1274,94 @@ R = {results['R']}
                     'message': f'Голосование завершено. Время окончания: {self.current_election.end_time}'
                 }
             else:
-                # Проверяем бюллетень
-                is_valid, msg = VotingCrypto.verify_bulletin(
+                # ИЗМЕНЕНИЕ: Всегда проверяем бюллетень и сохраняем результат
+                is_valid, validation_msg = VotingCrypto.verify_bulletin(
                     bulletin_data,
                     self.current_election.m,
                     self.current_election.e
                 )
 
+                # ДОБАВИТЬ: Автоматическая атака, если включена
+                if self.attack_enabled.get() and is_valid:
+                    import random
+                    attack_type = random.choice(['f', 'choice', 'rsa'])
+                    
+                    if attack_type == 'f':
+                        # Изменяем значение f
+                        original_f = bulletin_data.get('f')
+                        wrong_f = random.randint(1, self.current_election.m - 1)
+                        while wrong_f == original_f:
+                            wrong_f = random.randint(1, self.current_election.m - 1)
+                        bulletin_data['f'] = wrong_f
+                        is_valid = False
+                        validation_msg = f"⚠️ ИЗМЕНЕНО НА СЕРВЕРЕ: автоматически изменен f с {original_f} на {wrong_f}"
+                        self.log(f"⚠️ АТАКА: Автоматически изменен бюллетень {voter_id} (f: {original_f} -> {wrong_f})", "WARNING")
+                    
+                    elif attack_type == 'choice':
+                        # Изменяем choice и f
+                        original_choice = bulletin_data.get('choice')
+                        original_f = bulletin_data.get('f')
+                        new_choice = (original_choice % 3) + 1
+                        bulletin_data['choice'] = new_choice
+                        # Изменяем f
+                        wrong_f = random.randint(1, self.current_election.m - 1)
+                        while wrong_f == original_f:
+                            wrong_f = random.randint(1, self.current_election.m - 1)
+                        bulletin_data['f'] = wrong_f
+                        is_valid = False
+                        validation_msg = f"⚠️ ИЗМЕНЕНО НА СЕРВЕРЕ: автоматически изменен choice с {original_choice} на {new_choice}, f изменен с {original_f} на {wrong_f}"
+                        self.log(f"⚠️ АТАКА: Автоматически изменен choice и f в бюллетене {voter_id}", "WARNING")
+                    
+                    elif attack_type == 'rsa':
+                        # Изменяем параметры RSA и f
+                        original_f = bulletin_data.get('f')
+                        bulletin_data['m'] = self.current_election.m + 100
+                        bulletin_data['e'] = self.current_election.e + 1
+                        wrong_f = random.randint(1, self.current_election.m - 1)
+                        while wrong_f == original_f:
+                            wrong_f = random.randint(1, self.current_election.m - 1)
+                        bulletin_data['f'] = wrong_f
+                        is_valid = False
+                        validation_msg = f"⚠️ ИЗМЕНЕНО НА СЕРВЕРЕ: автоматически изменены параметры RSA, f изменен с {original_f} на {wrong_f}"
+                        self.log(f"⚠️ АТАКА: Автоматически изменены параметры RSA и f в бюллетене {voter_id}", "WARNING")
+
                 if not is_valid:
-                    response = {
-                        'type': 'submit_response',
-                        'success': False,
-                        'message': f'Неверный бюллетень: {msg}'
-                    }
-                else:
-                    # Создаем объект бюллетеня
+                    # ИЗМЕНЕНИЕ: Принимаем некорректный бюллетень, но помечаем его
+                    self.log(f"❌ Получен некорректный бюллетень от {voter_id}: {validation_msg}", "ERROR")
+                    
+                    # Создаем объект бюллетеня с пометкой о невалидности
                     bulletin = Bulletin(
                         voter_id=voter_id,
                         encrypted_data=bulletin_data,
                         signature=signature,
-                        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        is_valid=False,
+                        validation_message=validation_msg
+                    )
+
+                    # Добавляем бюллетень (даже некорректный)
+                    self.bulletins.append(bulletin)
+
+                    # Обновляем GUI
+                    self.root.after(0, self.update_bulletins_list)
+                    self.root.after(0, self.update_voters_list)
+
+                    response = {
+                        'type': 'submit_response',
+                        'success': False,
+                        'message': f'Бюллетень принят, но некорректен: {validation_msg}',
+                        'bulletin_id': len(self.bulletins),
+                        'is_valid': False
+                    }
+                else:
+                    # Корректный бюллетень
+                    bulletin = Bulletin(
+                        voter_id=voter_id,
+                        encrypted_data=bulletin_data,
+                        signature=signature,
+                        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        is_valid=True,
+                        validation_message="Бюллетень корректен"
                     )
 
                     # Добавляем бюллетень
@@ -950,11 +1372,6 @@ R = {results['R']}
                     self.voters[voter_id].bulletin_hash = hashlib.sha256(
                         json.dumps(bulletin_data, sort_keys=True).encode()
                     ).hexdigest()
-                    
-                    # Помечаем как опоздавшего, если голосовал после окончания
-                    # (хотя мы уже отклонили такие голоса, но на всякий случай)
-                    if is_late:
-                        self.voters[voter_id].is_late = True
 
                     # Обновляем GUI
                     self.root.after(0, self.update_bulletins_list)
@@ -964,10 +1381,11 @@ R = {results['R']}
                         'type': 'submit_response',
                         'success': True,
                         'message': 'Бюллетень принят',
-                        'bulletin_id': len(self.bulletins)
+                        'bulletin_id': len(self.bulletins),
+                        'is_valid': True
                     }
 
-                    self.log(f"Принят бюллетень от избирателя {voter_id}")
+                    self.log(f"✅ Принят корректный бюллетень от избирателя {voter_id}")
 
         MessageProtocol.send_message(client_socket, response)
 
@@ -1025,12 +1443,28 @@ R = {results['R']}
 
         for bulletin in self.bulletins:
             f_value = str(bulletin.encrypted_data.get('f', ''))
-            self.bulletins_tree.insert('', tk.END, values=(
+            
+            # ИЗМЕНЕНИЕ: Отображаем статус проверки с указанием изменений на сервере
+            if bulletin.is_valid:
+                status = "✅ Корректен"
+            else:
+                # Проверяем, было ли изменение на сервере
+                if "ИЗМЕНЕНО НА СЕРВЕРЕ" in bulletin.validation_message:
+                    status = bulletin.validation_message[:50] + "..." if len(bulletin.validation_message) > 50 else bulletin.validation_message
+                else:
+                    status = f"❌ {bulletin.validation_message[:30]}..."
+            
+            item = self.bulletins_tree.insert('', tk.END, values=(
                 bulletin.voter_id,
                 f_value[:50] + "..." if len(f_value) > 50 else f_value,
+                status,
                 str(bulletin.signature)[:30] + "..." if bulletin.signature else "",
                 bulletin.timestamp
             ))
+            
+            # Цветовая индикация
+            if not bulletin.is_valid:
+                self.bulletins_tree.item(item, tags=('invalid',))
 
     def run(self):
         """Запуск приложения сервера"""
