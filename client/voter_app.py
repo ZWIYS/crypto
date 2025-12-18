@@ -222,7 +222,7 @@ class VoterClient:
         self.attack_type = tk.StringVar(value="invalid_f")
         ttk.Radiobutton(attack_type_frame, text="Некорректное f", variable=self.attack_type, 
                        value="invalid_f").pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(attack_type_frame, text="Некорректные параметры RSA", variable=self.attack_type,
+        ttk.Radiobutton(attack_type_frame, text="Некорректные параметры ФФС", variable=self.attack_type,
                        value="invalid_rsa").pack(side=tk.LEFT, padx=5)
         ttk.Radiobutton(attack_type_frame, text="Нарушить вычисления", variable=self.attack_type,
                        value="broken_calc").pack(side=tk.LEFT, padx=5)
@@ -864,7 +864,7 @@ r: {signature.get('r', 'N/A')}
 s: {signature.get('s', 'N/A')}
 H: {signature.get('H', 'N/A')}
 
-Параметры RSA:
+Параметры ФФС:
 m: {bulletin_data.get('m', 'N/A')}
 e: {bulletin_data.get('e', 'N/A')}
         """
@@ -1013,10 +1013,10 @@ e: {bulletin_data.get('e', 'N/A')}
                     self.log(f"⚠️ АТАКА: Отправка некорректного f (было {original_f}, стало {wrong_f})", "WARNING")
                     
                 elif attack_type == "invalid_rsa":
-                    # Атака: изменяем параметры RSA на неверные
+                    # Атака: изменяем параметры ФФС на неверные
                     bulletin_data['m'] = self.election.m + 1000
                     bulletin_data['e'] = self.election.e + 10
-                    self.log(f"⚠️ АТАКА: Отправка некорректных параметров RSA (m={bulletin_data['m']}, e={bulletin_data['e']})", "WARNING")
+                    self.log(f"⚠️ АТАКА: Отправка некорректных параметров ФФС (m={bulletin_data['m']}, e={bulletin_data['e']})", "WARNING")
                     
                 elif attack_type == "broken_calc":
                     # Атака: нарушаем вычисления - изменяем t, но не пересчитываем f

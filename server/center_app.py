@@ -135,7 +135,7 @@ class CenterServer:
         btn_crypto = ttk.Frame(crypto_frame)
         btn_crypto.pack(pady=5)
 
-        ttk.Button(btn_crypto, text="🔑 Генерация RSA ключей",
+        ttk.Button(btn_crypto, text="🔑 Генерация ФФС ключей",
                    command=self.generate_rsa_keys).pack(side=tk.LEFT, padx=5)
 
         ttk.Button(btn_crypto, text="🔐 Генерация DSS параметров",
@@ -296,7 +296,7 @@ class CenterServer:
         ttk.Button(attack_btn_frame, text="🔓 Нарушить проверку",
                    command=self.attack_break_verification).pack(side=tk.LEFT, padx=5)
 
-        ttk.Button(attack_btn_frame, text="🔓 Изменить параметры RSA",
+        ttk.Button(attack_btn_frame, text="🔓 Изменить параметры ФФС",
                    command=self.attack_modify_rsa_params).pack(side=tk.LEFT, padx=5)
 
         self.attack_enabled = tk.BooleanVar(value=False)
@@ -356,14 +356,14 @@ class CenterServer:
     # === Основные методы сервера ===
 
     def generate_rsa_keys(self):
-        """Генерация RSA ключей"""
+        """Генерация ФФС ключей"""
         try:
             self.rsa_keys = RSACrypto.generate_keypair(2048)
-            self.crypto_status.config(text=f"✅ RSA ключи сгенерированы (m={self.rsa_keys['m']})")
-            self.log("RSA ключи успешно сгенерированы")
+            self.crypto_status.config(text=f"✅ ФФС ключи сгенерированы (m={self.rsa_keys['m']})")
+            self.log("ФФС ключи успешно сгенерированы")
         except Exception as e:
-            self.log(f"Ошибка генерации RSA ключей: {e}", "ERROR")
-            messagebox.showerror("Ошибка", f"Не удалось сгенерировать RSA ключи: {e}")
+            self.log(f"Ошибка генерации ФФС ключей: {e}", "ERROR")
+            messagebox.showerror("Ошибка", f"Не удалось сгенерировать ФФС ключи: {e}")
 
     def generate_dss_params(self):
         """Генерация DSS параметров"""
@@ -382,7 +382,7 @@ class CenterServer:
     def create_election(self):
         """Создание новых выборов"""
         if not self.rsa_keys:
-            messagebox.showwarning("Предупреждение", "Сначала сгенерируйте RSA ключи")
+            messagebox.showwarning("Предупреждение", "Сначала сгенерируйте ФФС ключи")
             return
 
         title = self.election_title.get().strip()
@@ -419,7 +419,7 @@ ID: {self.current_election.id}
 Описание: {self.current_election.description}
 Длительность: {self.current_election.duration_minutes} минут
 Статус: Не начаты
-Параметры RSA: m={self.current_election.m}, e={self.current_election.e}
+Параметры ФФС: m={self.current_election.m}, e={self.current_election.e}
         """
         self.election_info.delete(1.0, tk.END)
         self.election_info.insert(tk.END, info)
@@ -1171,7 +1171,7 @@ R = {results['R']}
             self.log(f"⚠️ АТАКА: Отправлено обновление опубликованной таблицы с измененным бюллетенем", "WARNING")
 
     def attack_modify_rsa_params(self):
-        """Атака: изменение параметров RSA"""
+        """Атака: изменение параметров ФФС"""
         voter_id = self.attack_voter_id_entry.get().strip()
         
         if not voter_id:
@@ -1183,8 +1183,10 @@ R = {results['R']}
             messagebox.showwarning("Предупреждение", f"Бюллетень избирателя {voter_id} не найден")
             return
         
-        # Изменяем параметры RSA и f
+        # Изменяем параметры ФФС и f
         original_f = bulletin.encrypted_data.get('f')
+        original_m = bulletin.encrypted_data.get('m')
+        original_e = bulletin.encrypted_data.get('e')
         bulletin.encrypted_data['m'] = original_m + 100
         bulletin.encrypted_data['e'] = original_e + 1
         
@@ -1208,11 +1210,11 @@ R = {results['R']}
             self.current_election.e
         )
         bulletin.is_valid = is_valid
-        bulletin.validation_message = f"⚠️ ИЗМЕНЕНО НА СЕРВЕРЕ: параметры RSA изменены (m: {original_m} -> {bulletin.encrypted_data['m']}, e: {original_e} -> {bulletin.encrypted_data['e']}), f изменен с {original_f} на {new_f}"
+        bulletin.validation_message = f"⚠️ ИЗМЕНЕНО НА СЕРВЕРЕ: параметры ФФС изменены (m: {original_m} -> {bulletin.encrypted_data['m']}, e: {original_e} -> {bulletin.encrypted_data['e']}), f изменен с {original_f} на {new_f}"
         
-        self.log(f"⚠️ АТАКА: Изменены параметры RSA в бюллетене {voter_id}", "WARNING")
+        self.log(f"⚠️ АТАКА: Изменены параметры ФФС в бюллетене {voter_id}", "WARNING")
         messagebox.showwarning("Атака выполнена",
-                             f"Параметры RSA изменены:\n"
+                             f"Параметры ФФС изменены:\n"
                              f"m: {original_m} -> {bulletin.encrypted_data['m']}\n"
                              f"e: {original_e} -> {bulletin.encrypted_data['e']}\n"
                              f"f изменен с {original_f} на {new_f}\n\n"
@@ -1313,7 +1315,7 @@ R = {results['R']}
                         self.log(f"⚠️ АТАКА: Автоматически изменен choice и f в бюллетене {voter_id}", "WARNING")
                     
                     elif attack_type == 'rsa':
-                        # Изменяем параметры RSA и f
+                        # Изменяем параметры ФФС и f
                         original_f = bulletin_data.get('f')
                         bulletin_data['m'] = self.current_election.m + 100
                         bulletin_data['e'] = self.current_election.e + 1
@@ -1322,8 +1324,8 @@ R = {results['R']}
                             wrong_f = random.randint(1, self.current_election.m - 1)
                         bulletin_data['f'] = wrong_f
                         is_valid = False
-                        validation_msg = f"⚠️ ИЗМЕНЕНО НА СЕРВЕРЕ: автоматически изменены параметры RSA, f изменен с {original_f} на {wrong_f}"
-                        self.log(f"⚠️ АТАКА: Автоматически изменены параметры RSA и f в бюллетене {voter_id}", "WARNING")
+                        validation_msg = f"⚠️ ИЗМЕНЕНО НА СЕРВЕРЕ: автоматически изменены параметры ФФС, f изменен с {original_f} на {wrong_f}"
+                        self.log(f"⚠️ АТАКА: Автоматически изменены параметры ФФС и f в бюллетене {voter_id}", "WARNING")
 
                 if not is_valid:
                     # ИЗМЕНЕНИЕ: Принимаем некорректный бюллетень, но помечаем его
