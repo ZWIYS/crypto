@@ -268,6 +268,9 @@ class VoterClient:
         
         ttk.Button(btn_frame, text="✅ Проверить МОЙ голос",
                    command=self.verify_my_vote).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(btn_frame, text="🔍 Проверить контрольные суммы",
+                   command=self.verify_checksums).pack(side=tk.LEFT, padx=5)
 
         # Секция проверки чужого голоса
         cross_verify_frame = ttk.LabelFrame(frame, text="Перекрестная проверка голосов", padding=10)
@@ -1552,7 +1555,184 @@ ID избирателя: {voter_id}
         
         ttk.Button(btn_frame, text="Закрыть", command=detail_window.destroy).pack(padx=5)
     
-    
+    def verify_checksums(self):
+        """Проверка контрольных сумм результатов голосования"""
+        if not self.published_bulletins:
+            messagebox.showwarning("Предупреждение", "Сначала получите опубликованные бюллетени")
+            return
+        
+        if not self.election or not self.election.results:
+            messagebox.showwarning("Предупреждение", "Результаты голосования еще не опубликованы")
+            return
+        
+        results = self.election.results
+        m = self.election.m
+        e = self.election.e
+        
+        published_F = results.get('F', 0)
+        published_Q = results.get('Q', 0)
+        published_R = results.get('R', 0)
+        published_for = results.get('for', 0)
+        published_against = results.get('against', 0)
+        published_abstained = results.get('abstained', 0)
+        
+        self.log("=" * 70)
+        self.log("ПРОВЕРКА КОНТРОЛЬНЫХ СУММ РЕЗУЛЬТАТОВ ГОЛОСОВАНИЯ")
+        self.log("=" * 70)
+        
+        checks_passed = []
+        checks_failed = []
+        
+        self.log(f"Опубликованные результаты:")
+        self.log(f"  Голоса 'ЗА': {published_for}")
+        self.log(f"  Голоса 'ПРОТИВ': {published_against}")
+        self.log(f"  Воздержались: {published_abstained}")
+        self.log(f"  F = {published_F}")
+        self.log(f"  Q = {published_Q}")
+        self.log(f"  R = {published_R}")
+        self.log("")
+        
+        self.log(f"Проверка 1: Вычисление F = произведение всех f (mod {m})")
+        calculated_F = 1
+        for bulletin in self.published_bulletins:
+            f_value = bulletin.get('f')
+            if isinstance(f_value, int):
+                calculated_F = (calculated_F * f_value) % m
+        
+        self.log(f"  Вычислено F = {calculated_F}")
+        self.log(f"  Опубликовано F = {published_F}")
+        
+        if calculated_F == published_F:
+            checks_passed.append("✅ Проверка F пройдена: F корректно вычислено")
+            self.log("  ✅ УСПЕХ: F совпадает!")
+        else:
+            checks_failed.append("❌ ПРОВАЛЕНО: F не совпадает! Возможна подделка результатов!")
+            self.log("  ❌ ОШИБКА: F НЕ СОВПАДАЕТ!")
+        
+        self.log("")
+        self.log("Проверка 2: Делимость Q на 2 (голоса 'ЗА')")
+        temp_Q = published_Q
+        calculated_for = 0
+        
+        while temp_Q % 2 == 0:
+            calculated_for += 1
+            temp_Q //= 2
+        
+        self.log(f"  Q делится на 2 в степени: {calculated_for}")
+        self.log(f"  Опубликовано голосов 'ЗА': {published_for}")
+        
+        if calculated_for == published_for:
+            checks_passed.append("✅ Проверка голосов 'ЗА' пройдена")
+            self.log("  ✅ УСПЕХ: Количество голосов 'ЗА' совпадает!")
+        else:
+            checks_failed.append(f"❌ ПРОВАЛЕНО: Голоса 'ЗА' не совпадают! Вычислено: {calculated_for}, опубликовано: {published_for}")
+            self.log(f"  ❌ ОШИБКА: Количество голосов 'ЗА' НЕ СОВПАДАЕТ!")
+        
+        self.log("")
+        self.log("Проверка 3: Делимость на 3 (голоса 'ПРОТИВ')")
+        calculated_against = 0
+        
+        while temp_Q % 3 == 0:
+            calculated_against += 1
+            temp_Q //= 3
+        
+        self.log(f"  Q делится на 3 в степени: {calculated_against}")
+        self.log(f"  Опубликовано голосов 'ПРОТИВ': {published_against}")
+        
+        if calculated_against == published_against:
+            checks_passed.append("✅ Проверка голосов 'ПРОТИВ' пройдена")
+            self.log("  ✅ УСПЕХ: Количество голосов 'ПРОТИВ' совпадает!")
+        else:
+            checks_failed.append(f"❌ ПРОВАЛЕНО: Голоса 'ПРОТИВ' не совпадают! Вычислено: {calculated_against}, опубликовано: {published_against}")
+            self.log(f"  ❌ ОШИБКА: Количество голосов 'ПРОТИВ' НЕ СОВПАДАЕТ!")
+        
+        calculated_R = temp_Q
+        self.log("")
+        self.log(f"Проверка 4: Остаток R (произведение всех q)")
+        self.log(f"  Вычислено R = {calculated_R}")
+        self.log(f"  Опубликовано R = {published_R}")
+        
+        if calculated_R == published_R:
+            checks_passed.append("✅ Проверка R пройдена")
+            self.log("  ✅ УСПЕХ: R совпадает!")
+        else:
+            checks_failed.append(f"❌ ПРОВАЛЕНО: R не совпадает! Вычислено: {calculated_R}, опубликовано: {published_R}")
+            self.log("  ❌ ОШИБКА: R НЕ СОВПАДАЕТ!")
+        
+        total_votes = published_for + published_against + published_abstained
+        total_bulletins = len(self.published_bulletins)
+        
+        self.log("")
+        self.log(f"Проверка 5: Общее количество голосов")
+        self.log(f"  Бюллетеней опубликовано: {total_bulletins}")
+        self.log(f"  Голосов подсчитано: {total_votes}")
+        
+        if total_votes <= total_bulletins:
+            checks_passed.append("✅ Количество голосов не превышает количество бюллетеней")
+            self.log("  ✅ УСПЕХ: Количество голосов корректно!")
+        else:
+            checks_failed.append(f"❌ ПРОВАЛЕНО: Голосов больше чем бюллетеней!")
+            self.log("  ❌ ОШИБКА: Голосов больше чем бюллетеней!")
+        
+        self.log("")
+        self.log("=" * 70)
+        self.log("ИТОГИ ПРОВЕРКИ:")
+        self.log("=" * 70)
+        
+        for check in checks_passed:
+            self.log(check)
+        
+        for check in checks_failed:
+            self.log(check)
+        
+        self.log("=" * 70)
+        
+        if not checks_failed:
+            result_text = f"""
+{'=' * 60}
+✅ ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ УСПЕШНО!
+{'=' * 60}
+
+Результаты голосования верифицированы и корректны:
+
+{chr(10).join(checks_passed)}
+
+Проверено:
+  • F = произведение всех зашифрованных бюллетеней
+  • Делимость Q на 2 (голоса 'ЗА'): {calculated_for}
+  • Делимость Q на 3 (голоса 'ПРОТИВ'): {calculated_against}
+  • Остаток R (произведение q)
+  • Общее количество голосов
+
+Результаты можно считать достоверными.
+Манипуляции не обнаружены.
+
+Дата проверки: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+{'=' * 60}
+            """
+            messagebox.showinfo("✅ Проверка успешна", result_text)
+            self.log("✅ ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ УСПЕШНО!", "SUCCESS")
+        else:
+            result_text = f"""
+{'=' * 60}
+❌ ОБНАРУЖЕНЫ ПРОБЛЕМЫ!
+{'=' * 60}
+
+Некоторые проверки не пройдены:
+
+{chr(10).join(checks_failed)}
+
+Успешные проверки:
+{chr(10).join(checks_passed)}
+
+⚠️ ВНИМАНИЕ: Результаты могут быть недостоверными!
+Возможна манипуляция данными или ошибка в подсчете.
+
+Дата проверки: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+{'=' * 60}
+            """
+            messagebox.showerror("❌ Проверка провалена", result_text)
+            self.log("❌ НЕКОТОРЫЕ ПРОВЕРКИ НЕ ПРОЙДЕНЫ!", "ERROR")
 
 
 def main():
