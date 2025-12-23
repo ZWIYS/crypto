@@ -16,7 +16,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common.protocol import MessageProtocol
-from common.crypto import RSACrypto, VotingCrypto
+from common.crypto import RSACrypto, VotingCrypto, FFSCrypto
 from common.models import Election, Voter, Bulletin, ServerConfig
 from dss import EntropyCollector, DSA
 
@@ -50,6 +50,12 @@ class CenterServer:
         self.entropy = EntropyCollector()
         self.dsa = DSA(self.entropy)
         self.dss_initialized = False
+        
+        # FFS аутентификация
+        self.ffs = FFSCrypto(self.entropy)
+        self.ffs_n = None
+        self.ffs_initialized = False
+        self.ffs_auth_sessions = {}  # voter_id -> {'x': x, 'b': b, 'v': v}
 
         # GUI
         self.root = tk.Tk()
@@ -138,8 +144,8 @@ class CenterServer:
         ttk.Button(btn_crypto, text="🔑 Генерация ФФС ключей",
                    command=self.generate_rsa_keys).pack(side=tk.LEFT, padx=5)
 
-        ttk.Button(btn_crypto, text="🔐 Генерация DSS параметров",
-                   command=self.generate_dss_params).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_crypto, text="🔐 Генерация FFS параметров",
+                   command=self.generate_ffs_params).pack(side=tk.LEFT, padx=5)
 
         self.crypto_status = ttk.Label(crypto_frame, text="Ключи не сгенерированы")
         self.crypto_status.pack()
@@ -378,6 +384,20 @@ class CenterServer:
         except Exception as e:
             self.log(f"Ошибка генерации DSS параметров: {e}", "ERROR")
             messagebox.showerror("Ошибка", f"Не удалось сгенерировать DSS параметры: {e}")
+
+    def generate_ffs_params(self):
+        """Генерация FFS параметров"""
+        try:
+            self.log("Начинается генерация FFS параметров...")
+            params = self.ffs.generate_server_params(bits=512)
+            self.ffs_n = params['n']
+            self.ffs_initialized = True
+            self.crypto_status.config(text=f"✅ FFS параметры сгенерированы (n={self.ffs_n})")
+            self.log(f"✅ FFS параметры успешно сгенерированы: n={self.ffs_n}")
+            messagebox.showinfo("Успех", "FFS параметры успешно сгенерированы")
+        except Exception as e:
+            self.log(f"Ошибка генерации FFS параметров: {e}", "ERROR")
+            messagebox.showerror("Ошибка", f"Не удалось сгенерировать FFS параметры: {e}")
 
     def create_election(self):
         """Создание новых выборов"""
@@ -888,7 +908,8 @@ R = {results['R']}
                 'type': 'register_response',
                 'success': True,
                 'message': 'Вы уже зарегистрированы и допущены к голосованию',
-                'voter': self.voters[voter_id].to_dict()
+                'voter': self.voters[voter_id].to_dict(),
+                'ffs_n': self.ffs_n if self.ffs_initialized else None
             }
         else:
             # Создаем нового избирателя
@@ -906,50 +927,124 @@ R = {results['R']}
                 'type': 'register_response',
                 'success': True,
                 'message': 'Регистрация успешна',
-                'voter': voter.to_dict()
+                'voter': voter.to_dict(),
+                'ffs_n': self.ffs_n if self.ffs_initialized else None
             }
 
-            self.log(f"Зарегистрирован новый избиратель: {voter_name}")
+            self.log(f"Зарегистрирован новый избиратель: {voter_name} (FFS v={message.get('public_key', '')})")
 
         MessageProtocol.send_message(client_socket, response)
 
     def handle_authenticate(self, client_socket, message):
-        """Обработка аутентификации избирателя"""
+        """Обработка аутентификации избирателя по протоколу FFS"""
         voter_id = message.get('voter_id')
-
-        if voter_id not in self.voters:
+        step = message.get('step', 1)
+        
+        if not self.ffs_initialized:
             response = {
                 'type': 'authenticate_response',
                 'success': False,
-                'message': 'Избиратель не найден'
+                'message': 'FFS параметры не инициализированы на сервере'
             }
-        elif self.allowed_voters and voter_id not in self.allowed_voters:
-            response = {
-                'type': 'authenticate_response',
-                'success': False,
-                'message': 'Избиратель не допущен к голосованию'
-            }
-        elif self.voters[voter_id].has_voted:
-            response = {
-                'type': 'authenticate_response',
-                'success': False,
-                'message': 'Избиратель уже проголосовал'
-            }
-        else:
-            self.authenticated_voters.add(voter_id)
-            # Обновляем список избирателей после аутентификации
-            self.root.after(0, self.update_voters_list)
+            MessageProtocol.send_message(client_socket, response)
+            return
+        
+        if step == 1:
+            # Шаг 1: Получаем commitment от клиента
+            x = message.get('x')
+            v = message.get('v')
             
-            response = {
-                'type': 'authenticate_response',
-                'success': True,
-                'message': 'Аутентификация успешна',
-                'election': self.current_election.to_dict() if self.current_election else None,
-                'voters_count': len(self.voters),
-                'voted_count': sum(1 for v in self.voters.values() if v.has_voted)
-            }
-
-        MessageProtocol.send_message(client_socket, response)
+            self.log(f"📩 FFS Аутентификация {voter_id}: Получено обязательство x={x}")
+            
+            if voter_id not in self.voters:
+                response = {
+                    'type': 'authenticate_response',
+                    'success': False,
+                    'message': 'Избиратель не найден'
+                }
+            elif self.allowed_voters and voter_id not in self.allowed_voters:
+                response = {
+                    'type': 'authenticate_response',
+                    'success': False,
+                    'message': 'Избиратель не допущен к голосованию'
+                }
+            elif self.voters[voter_id].has_voted:
+                response = {
+                    'type': 'authenticate_response',
+                    'success': False,
+                    'message': 'Избиратель уже проголосовал'
+                }
+            else:
+                # Генерируем вызов
+                b = FFSCrypto.create_challenge(self.entropy)
+                
+                # Сохраняем данные сессии
+                self.ffs_auth_sessions[voter_id] = {
+                    'x': x,
+                    'b': b,
+                    'v': v
+                }
+                
+                self.log(f"📤 FFS Аутентификация {voter_id}: Отправлен вызов b={b}")
+                
+                response = {
+                    'type': 'authenticate_challenge',
+                    'success': True,
+                    'b': b,
+                    'message': 'Отправлен вызов для аутентификации'
+                }
+                
+            MessageProtocol.send_message(client_socket, response)
+            
+        elif step == 2:
+            # Шаг 2: Получаем ответ от клиента и проверяем
+            y = message.get('y')
+            
+            self.log(f"📩 FFS Аутентификация {voter_id}: Получен ответ y={y}")
+            
+            if voter_id not in self.ffs_auth_sessions:
+                response = {
+                    'type': 'authenticate_response',
+                    'success': False,
+                    'message': 'Сессия аутентификации не найдена'
+                }
+            else:
+                session = self.ffs_auth_sessions[voter_id]
+                x = session['x']
+                b = session['b']
+                v = session['v']
+                
+                # Проверяем ответ
+                is_valid = FFSCrypto.verify_response(x, y, v, b, self.ffs_n)
+                
+                if is_valid:
+                    self.authenticated_voters.add(voter_id)
+                    # Обновляем список избирателей после аутентификации
+                    self.root.after(0, self.update_voters_list)
+                    
+                    self.log(f"✅ FFS Аутентификация {voter_id}: УСПЕШНА!")
+                    
+                    response = {
+                        'type': 'authenticate_response',
+                        'success': True,
+                        'message': 'Аутентификация успешна',
+                        'election': self.current_election.to_dict() if self.current_election else None,
+                        'voters_count': len(self.voters),
+                        'voted_count': sum(1 for v in self.voters.values() if v.has_voted)
+                    }
+                else:
+                    self.log(f"❌ FFS Аутентификация {voter_id}: ПРОВАЛЕНА!")
+                    
+                    response = {
+                        'type': 'authenticate_response',
+                        'success': False,
+                        'message': 'Аутентификация не пройдена: неверный ответ'
+                    }
+                
+                # Удаляем сессию
+                del self.ffs_auth_sessions[voter_id]
+                
+            MessageProtocol.send_message(client_socket, response)
 
     def verify_all_bulletins(self):
         """Проверка всех бюллетеней на корректность"""

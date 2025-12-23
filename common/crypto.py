@@ -1,11 +1,14 @@
 """
 Криптографические функции для электронного голосования
 """
-import random
 import hashlib
 from Crypto.PublicKey import RSA
 from Crypto.Util import number
 import json
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from dss import EntropyCollector, generate_prime, miller_rabin
 
 
 class RSACrypto:
@@ -33,6 +36,211 @@ class RSACrypto:
     def decrypt_number(encrypted: int, m: int, d: int) -> int:
         """Дешифрование числа с использованием параметров RSA"""
         return pow(encrypted, d, m)
+
+
+class FFSCrypto:
+    """Класс для аутентификации по схеме Feige-Fiat-Shamir"""
+
+    def __init__(self, entropy_collector: EntropyCollector = None):
+        """Инициализация FFS"""
+        self.ec = entropy_collector if entropy_collector else EntropyCollector()
+        self.ec.add_os_entropy(64)
+        self.ec.add_time_jitter(256)
+        
+        self.p = None
+        self.q = None
+        self.n = None
+        self.s = None
+        self.v = None
+
+    def generate_server_params(self, bits: int = 512) -> dict[str, int]:
+        """
+        Генерация параметров сервера (p, q, n)
+        
+        Args:
+            bits: размер простых чисел p и q в битах
+            
+        Returns:
+            Словарь с параметрами {'n': n, 'p': p, 'q': q}
+        """
+        print("FFS: Начинается генерация параметров сервера...")
+        
+        self.ec.add_os_entropy(128)
+        self.ec.add_time_jitter(512)
+        
+        print(f"FFS: Генерация первого простого числа p ({bits} бит)...")
+        self.p = generate_prime(self.ec, bits)
+        print(f"FFS: Простое число p сгенерировано: {self.p}")
+        
+        self.ec.add_os_entropy(128)
+        self.ec.add_time_jitter(512)
+        
+        print(f"FFS: Генерация второго простого числа q ({bits} бит)...")
+        self.q = generate_prime(self.ec, bits)
+        print(f"FFS: Простое число q сгенерировано: {self.q}")
+        
+        self.n = self.p * self.q
+        print(f"FFS: Вычислен модуль n = p * q = {self.n}")
+        
+        return {
+            'n': self.n,
+            'p': self.p,
+            'q': self.q
+        }
+
+    def generate_client_keys(self, n: int) -> dict[str, int]:
+        """
+        Генерация ключей клиента (s - секретный, v - публичный)
+        
+        Args:
+            n: модуль из параметров сервера
+            
+        Returns:
+            Словарь с ключами {'s': s, 'v': v}
+        """
+        print("FFS: Начинается генерация ключей клиента...")
+        
+        self.n = n
+        self.ec.add_os_entropy(64)
+        self.ec.add_time_jitter(256)
+        
+        prng = self.ec.get_prng()
+        
+        print("FFS: Генерация секретного ключа s...")
+        self.s = prng.randint(2, n - 1)
+        print(f"FFS: Секретный ключ s сгенерирован")
+        
+        print("FFS: Вычисление публичного ключа v = s^2 mod n...")
+        self.v = pow(self.s, 2, n)
+        print(f"FFS: Публичный ключ v = {self.v}")
+        
+        return {
+            's': self.s,
+            'v': self.v
+        }
+
+    def create_commitment(self, n: int) -> dict[str, int]:
+        """
+        Создание обязательства (commitment) для аутентификации
+        Шаг 1 протокола FFS
+        
+        Args:
+            n: модуль из параметров сервера
+            
+        Returns:
+            Словарь {'r': r, 'x': x} где r - случайное число, x = r^2 mod n
+        """
+        print("\n=== FFS АУТЕНТИФИКАЦИЯ: Шаг 1 - Создание обязательства ===")
+        
+        self.n = n
+        self.ec.add_os_entropy(32)
+        self.ec.add_time_jitter(128)
+        
+        prng = self.ec.get_prng()
+        
+        print("FFS: Клиент генерирует случайное число r...")
+        r = prng.randint(2, n - 1)
+        print(f"FFS: Случайное число r сгенерировано")
+        
+        print("FFS: Клиент вычисляет x = r^2 mod n...")
+        x = pow(r, 2, n)
+        print(f"FFS: Обязательство x = {x}")
+        print("FFS: Обязательство отправляется серверу")
+        
+        return {
+            'r': r,
+            'x': x
+        }
+
+    def create_response(self, r: int, s: int, b: int, n: int) -> int:
+        """
+        Создание ответа на вызов сервера
+        Шаг 3 протокола FFS
+        
+        Args:
+            r: случайное число из commitment
+            s: секретный ключ клиента
+            b: вызов от сервера (0 или 1)
+            n: модуль
+            
+        Returns:
+            y = r * s^b mod n
+        """
+        print(f"\n=== FFS АУТЕНТИФИКАЦИЯ: Шаг 3 - Формирование ответа ===")
+        print(f"FFS: Получен вызов от сервера: b = {b}")
+        
+        if b == 0:
+            print("FFS: Вызов b = 0, вычисляем y = r mod n")
+            y = r % n
+        else:
+            print("FFS: Вызов b = 1, вычисляем y = r * s mod n")
+            y = (r * s) % n
+        
+        print(f"FFS: Ответ y = {y}")
+        print("FFS: Ответ отправляется серверу для проверки")
+        
+        return y
+
+    @staticmethod
+    def create_challenge(ec: EntropyCollector = None) -> int:
+        """
+        Создание вызова (challenge) от сервера
+        Шаг 2 протокола FFS
+        
+        Args:
+            ec: коллектор энтропии (опционально)
+            
+        Returns:
+            b: случайный бит (0 или 1)
+        """
+        print("\n=== FFS АУТЕНТИФИКАЦИЯ: Шаг 2 - Генерация вызова ===")
+        
+        if ec is None:
+            ec = EntropyCollector()
+            ec.add_os_entropy(16)
+            ec.add_time_jitter(64)
+        
+        prng = ec.get_prng()
+        b = prng.randint(0, 1)
+        
+        print(f"FFS: Сервер генерирует случайный вызов b = {b}")
+        print("FFS: Вызов отправляется клиенту")
+        
+        return b
+
+    @staticmethod
+    def verify_response(x: int, y: int, v: int, b: int, n: int) -> bool:
+        """
+        Проверка ответа клиента
+        Шаг 4 протокола FFS
+        
+        Args:
+            x: обязательство от клиента
+            y: ответ от клиента
+            v: публичный ключ клиента
+            b: вызов от сервера
+            n: модуль
+            
+        Returns:
+            True если проверка прошла успешно
+        """
+        print("\n=== FFS АУТЕНТИФИКАЦИЯ: Шаг 4 - Проверка ответа ===")
+        print(f"FFS: Сервер проверяет: y^2 mod n == x * v^b mod n")
+        
+        left = pow(y, 2, n)
+        print(f"FFS: Левая часть: y^2 mod n = {left}")
+        
+        right = (x * pow(v, b, n)) % n
+        print(f"FFS: Правая часть: x * v^{b} mod n = {right}")
+        
+        result = (left == right)
+        
+        if result:
+            print("FFS: ✓ ПРОВЕРКА УСПЕШНА! Клиент прошел аутентификацию")
+        else:
+            print("FFS: ✗ ПРОВЕРКА ПРОВАЛЕНА! Аутентификация не пройдена")
+        
+        return result
 
 
 class VotingCrypto:
