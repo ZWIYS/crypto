@@ -15,7 +15,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common.protocol import MessageProtocol
-from common.crypto import VotingCrypto
+from common.crypto import VotingCrypto, FFSCrypto
 from common.models import Voter, Election
 from dss import EntropyCollector, DSA
 
@@ -44,6 +44,14 @@ class VoterClient:
         self.dss_entropy = EntropyCollector()
         self.dsa = DSA(self.dss_entropy)
         self.dss_keys_generated = False
+        
+        # FFS аутентификация
+        self.ffs = FFSCrypto(self.dss_entropy)
+        self.ffs_n = None
+        self.ffs_s = None
+        self.ffs_v = None
+        self.ffs_keys_generated = False
+        self.ffs_auth_r = None
         
         # Данные моего голоса для проверки
         self.my_bulletin_data = None
@@ -524,6 +532,8 @@ class VoterClient:
 
         if msg_type == 'register_response':
             self.handle_register_response(message)
+        elif msg_type == 'authenticate_challenge':
+            self.handle_authenticate_challenge(message)
         elif msg_type == 'authenticate_response':
             self.handle_authenticate_response(message)
         elif msg_type == 'submit_response':
@@ -556,7 +566,16 @@ class VoterClient:
             voter_data = message.get('voter', {})
             self.voter = Voter.from_dict(voter_data)
             if self.voter:
-                self.registry_status[self.voter.id] = "✅ Аутентифицировался"
+                self.registry_status[self.voter.id] = "✅ Зарегистрирован"
+            
+            # Получаем FFS параметры от сервера
+            ffs_n = message.get('ffs_n')
+            if ffs_n:
+                self.ffs_n = ffs_n
+                self.log(f"Получен FFS параметр n от сервера: {ffs_n}", "SUCCESS")
+                # Генерируем FFS ключи
+                self.generate_ffs_keys()
+            
             self.update_voter_info()
             self.log(f"Регистрация успешна: {msg_text}", "SUCCESS")
 
@@ -566,6 +585,34 @@ class VoterClient:
             self.log(f"Ошибка регистрации: {msg_text}", "ERROR")
             messagebox.showerror("Ошибка", msg_text)
 
+    def handle_authenticate_challenge(self, message: dict):
+        """Обработка вызова (challenge) от сервера при FFS аутентификации"""
+        success = message.get('success', False)
+        msg_text = message.get('message', '')
+        
+        if success:
+            b = message.get('b')
+            self.log(f"Получен вызов от сервера: b = {b}", "SUCCESS")
+            
+            # Создаем ответ
+            if self.ffs_auth_r and self.ffs_s and self.ffs_n:
+                y = self.ffs.create_response(self.ffs_auth_r, self.ffs_s, b, self.ffs_n)
+                
+                # Отправляем ответ
+                self.send_message({
+                    'type': 'authenticate',
+                    'voter_id': self.voter.id,
+                    'step': 2,
+                    'y': y,
+                    'timestamp': datetime.now().isoformat()
+                })
+            else:
+                self.log("Ошибка: нет данных для создания ответа", "ERROR")
+                messagebox.showerror("Ошибка", "Не удалось создать ответ для аутентификации")
+        else:
+            self.log(f"Ошибка получения вызова: {msg_text}", "ERROR")
+            messagebox.showerror("Ошибка", msg_text)
+    
     def handle_authenticate_response(self, message: dict):
         """Обработка ответа на аутентификацию"""
         success = message.get('success', False)
@@ -875,7 +922,7 @@ e: {bulletin_data.get('e', 'N/A')}
     # === Методы взаимодействия с сервером ===
 
     def register_voter(self):
-        """Регистрация избирателя"""
+        """Регистрация избирателя с использованием FFS"""
         voter_id = self.voter_id_entry.get().strip()
         voter_name = self.voter_name_entry.get().strip()
 
@@ -884,57 +931,55 @@ e: {bulletin_data.get('e', 'N/A')}
             return
 
         if not self.dss_keys_generated:
-            messagebox.showwarning("Предупреждение", "Сначала сгенерируйте DSS ключи")
+            messagebox.showwarning("Предупреждение", "Сначала сгенерируйте DSS ключи для голосования")
             return
 
-        # Создаем подпись
-        reg_message = f"REGISTER:{voter_id}:{voter_name}:{datetime.now().timestamp()}"
-
         try:
-            signature = self.dsa.sign(reg_message)
-            if not signature:
-                messagebox.showerror("Ошибка", "Не удалось создать подпись")
-                return
-
-            r, s, H = signature
-
-            # Отправляем запрос
+            # Отправляем запрос на регистрацию (FFS ключи будут сгенерированы после получения n от сервера)
             self.send_message({
                 'type': 'register',
                 'voter_id': voter_id,
                 'voter_name': voter_name,
-                'public_key': str(self.dsa.y) if self.dsa.y else None,
-                'signature': {'r': r, 's': s, 'H': H},
+                'public_key': None,  # Будет заполнено после генерации FFS ключей
                 'timestamp': datetime.now().isoformat()
             })
+            
+            self.log(f"Отправлен запрос на регистрацию для {voter_name}", "INFO")
 
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка при регистрации: {e}")
 
     def authenticate_voter(self):
-        """Аутентификация избирателя"""
+        """Аутентификация избирателя по протоколу FFS"""
         if not self.voter:
             messagebox.showwarning("Предупреждение", "Сначала зарегистрируйтесь")
             return
 
-        # Создаем подпись
-        auth_message = f"AUTH:{self.voter.id}:{datetime.now().timestamp()}"
+        if not self.ffs_keys_generated:
+            messagebox.showwarning("Предупреждение", "FFS ключи не сгенерированы")
+            return
+
+        if not self.ffs_n:
+            messagebox.showwarning("Предупреждение", "FFS параметр n не получен от сервера")
+            return
 
         try:
-            signature = self.dsa.sign(auth_message)
-            if not signature:
-                messagebox.showerror("Ошибка", "Не удалось создать подпись")
-                return
+            # Создаем обязательство (commitment)
+            commitment = self.ffs.create_commitment(self.ffs_n)
+            self.ffs_auth_r = commitment['r']
+            x = commitment['x']
 
-            r, s, H = signature
-
-            # Отправляем запрос
+            # Отправляем первое сообщение с обязательством
             self.send_message({
                 'type': 'authenticate',
                 'voter_id': self.voter.id,
-                'signature': {'r': r, 's': s, 'H': H},
+                'step': 1,
+                'x': x,
+                'v': self.ffs_v,
                 'timestamp': datetime.now().isoformat()
             })
+            
+            self.log(f"Отправлено обязательство для аутентификации FFS", "INFO")
 
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка при аутентификации: {e}")
@@ -1176,6 +1221,31 @@ g: {self.dsa.g}
         except Exception as e:
             self.log(f"Ошибка генерации DSS ключей: {e}", "ERROR")
             messagebox.showerror("Ошибка", f"Не удалось сгенерировать DSS ключи: {e}")
+
+    def generate_ffs_keys(self):
+        """Генерация FFS ключей"""
+        try:
+            if not self.ffs_n:
+                self.log("Ошибка: FFS параметр n не получен от сервера", "ERROR")
+                messagebox.showerror("Ошибка", "FFS параметр n не получен от сервера")
+                return
+            
+            self.log("Начинается генерация FFS ключей...", "INFO")
+            
+            keys = self.ffs.generate_client_keys(self.ffs_n)
+            self.ffs_s = keys['s']
+            self.ffs_v = keys['v']
+            self.ffs_keys_generated = True
+            
+            # Обновляем публичный ключ в профиле избирателя
+            if self.voter:
+                self.voter.public_key = str(self.ffs_v)
+            
+            self.log(f"✅ FFS ключи успешно сгенерированы: v={self.ffs_v}", "SUCCESS")
+            
+        except Exception as e:
+            self.log(f"Ошибка генерации FFS ключей: {e}", "ERROR")
+            messagebox.showerror("Ошибка", f"Не удалось сгенерировать FFS ключи: {e}")
 
     def verify_signature(self):
         """Проверка собственной подписи"""
