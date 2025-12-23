@@ -697,6 +697,8 @@ class VoterClient:
         self.update_published_bulletins(bulletins)
 
         if results:
+            if self.election:
+                self.election.results = results
             self.update_results(results)
 
     def handle_election_started(self, message: dict):
@@ -735,6 +737,8 @@ class VoterClient:
     def handle_results_published(self, message: dict):
         """Обработка публикации результатов"""
         results = message.get('results', {})
+        if self.election:
+            self.election.results = results
         self.update_results(results)
 
         self.log("Опубликованы результаты голосования", "INFO")
